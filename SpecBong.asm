@@ -2,9 +2,9 @@
 ; SpecBong - tutorial-like project to load Layer2 image and move sprites
 ; © Peter Helcmanovsky, John McGibbitts 2020, license: https://opensource.org/licenses/MIT
 ;
-; to build this ASM file I use https://github.com/z00m128/sjasmplus command:
+; to build this ASM file we use https://github.com/z00m128/sjasmplus command:
 ;       sjasmplus --fullpath --nologo --lst --lstlab --msg=war SpecBong.asm
-; (this will also produce the listing file, so I can review the machine code generated
+; (this will also produce the listing file, so we can review the machine code generated
 ; and addresses assigned to various symbols)
 ;
 ; to convert BMP to upside-down TGA I use ImageMagick "convert" command:
@@ -27,13 +27,13 @@
 ; ^ it's the default mapping of assembler at assembling time, at runtime the NEXLOAD
 ; will set the default mapping the same way, but first 16k is ROM, not bank 7.
 
-; $8000..BFFF is here Bank 2 (pages 4 and 5) -> I will put **all** code here
+; $8000..BFFF is here Bank 2 (pages 4 and 5) -> we will put **all** code here
     ORG $8000
 start:
     ; break at start when running in CSpect with "-brk" option
         break : nop : nop       ; 2x"nop" after "break" to make real board survive "break" (= ld bc,0)
 
-    ; disable interrupts, I will avoid using them to keep code simpler to understand
+    ; disable interrupts, we will avoid using them to keep code simpler to understand
         di
     ; make the Layer 2 visible and reset some registers (should be reset by NEXLOAD, but to be safe)
         nextreg $69,$80         ; Layer 2 visible, ULA bank 5, Timex mode 0
@@ -98,7 +98,7 @@ initialStackTop:
 
     ; pre-load the image pixel data from TGA file into memory (to store it in NEX file)
         ; the pixel data will be in 16k banks 9, 10, 11 (8k pages: 18, 19, .., 23)
-        ; I will use the last page region $E000..$FFFF to map through all the pages and
+        ; We will use the last page region $E000..$FFFF to map through all the pages and
         ; include the binary pixel data from the TGA file, using sjasmplus MMU directive
 
     ; map into last slot first Layer2 page (8ki page number = 16ki bank * 2 = 9*2 = 18)
