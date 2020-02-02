@@ -87,6 +87,59 @@ SetPaletteLoop:
     ; the image pixel data are already in the correct banks 9,10,11 - loaded by NEX loader
         ; nothing to do with the pixel data - we are done
 
+    ; ------------------------------------------------------------------------------------
+    ; Part 2 - uploading sprite graphics and debug-display of all gfx patterns in 8x8 grid
+    ; (the debug display does already use HW sprites to show all gfx patterns)
+    ; ------------------------------------------------------------------------------------
+
+    ; sprite gfx does use the default palette: color[i] = convert8bitColorTo9bit(i);
+    ; which is set by the NEX loader in the first sprite palette
+        ; nothing to do here in the code with sprite palette
+
+    ; upload the sprite gfx patterns to patterns memory (from regular memory - loaded by NEX loader)
+        ; preconfigure the Next for uploading patterns from slot 0
+        ld      bc,$303B
+        xor     a
+        out     (c),a       ; select slot 0 for patterns (selects also index 0 for attributes)
+        ; we will map full 16kiB to memory region $C000..$FFFF (to pages 25,26 with sprite pixels)
+        nextreg $56,$$SpritePixelData   ; C000..DFFF <- 8k page 25
+        nextreg $57,$$SpritePixelData+1 ; E000..FFFF <- 8k page 26
+        ld      hl,SpritePixelData      ; HL = $C000 (beginning of the sprite pixels)
+        ld      bc,$5B                  ; sprite pattern-upload I/O port, B=0 (inner loop counter)
+        ld      a,64                    ; 64 patterns (outer loop counter), each pattern is 256 bytes long
+UploadSpritePatternsLoop:
+        ; upload 256 bytes of pattern data (otir increments HL and decrements B until zero)
+        otir                            ; B=0 ahead, so otir will repeat 256x ("dec b" wraps 0 to 255)
+            ; you can use F7 in CSpect debugger to single step over each iteration to see how
+            ; the B wraps from initial 00 to FF, FE, ... until 00 again, doing 256x `outi`
+            ; or you can use F8 to do the whole `otir` in single step-over way
+        dec     a
+        jr      nz,UploadSpritePatternsLoop ; do 64 patterns
+
+    ; create DEBUG 8x8 grid of sprites, showing all the patterns currently uploaded
+        ld      c,$57                   ; sprite pattern-upload I/O port
+            ; sprite index is already set to 0 above, where the pattern slot was set to 0
+        ld      hl,$2020                ; X (H) = 32, Y (L) = 32
+        ; byte 3 (D) = +0 palette offset, no mirror/rotation, X.msb=0
+        ; byte 4 (E) = visible sprite = 1, 4B type (0), pattern 0
+        ld      de,%0000'0'0'0'0'1'0'000000
+DebugSpriteGridLoopRow:
+        ld      b,8                     ; 8 sprites per single row in grid
+DebugSpriteGridLoopSingleSprite:
+        ; upload 4B type of sprite attributes
+        out     (c),h   ; X
+        out     (c),l   ; Y
+        out     (c),d   ; pal.offset, mirrors/rotate, X.msb
+        out     (c),e   ; visible, 4B type, pattern number
+        ; advance position and pattern
+        inc     e                       ; ++pattern for next sprite
+        add     hl,24<<8                ; X += 24
+        djnz    DebugSpriteGridLoopSingleSprite
+        add     hl,((-24*8)<<8) + 24    ; X -= 24*8, Y += 24
+        ld      a,e
+        cp      8*8 + $80               ; sprite visible flag + pattern == 64 -> end loop
+        jr      nz,DebugSpriteGridLoopRow   ; until all 0..63 sprites/patterns are set
+
     ; do the infinite loop to not run some random memory content as code
         jr      $
 
@@ -115,10 +168,17 @@ initialStackTop:
 BackGroundPalette:
         INCBIN "SpecBong.tga", 0x12, 3*256  ; 768 bytes of palette data
 
+    ; sprite pixel data from the raw binary file SBsprite.spr, aligned to next
+    ; page after palette data (8k page 25), it will occupy two pages: 25, 26
+        MMU 6 7, $$BackGroundPalette + 1    ; using 16ki memory region $C000..$FFFF
+        ORG $C000
+SpritePixelData:
+        INCBIN "SBsprite.spr"
+
     ; all the data are in the virtual-device memory, now dump it into NEX file
         SAVENEX OPEN "SpecBong.nex", start, initialStackTop, 0, 2   ; V1.2 enforced
         SAVENEX CORE 3, 0, 0        ; core 3.0.0 required
         SAVENEX CFG 1               ; blue border (as debug)
         SAVENEX AUTO                ; dump all modified banks into NEX file
-            ; currently the 16k Banks stored will be: 2, 9, 10, 11, 12
+            ; currently the 16k Banks stored will be: 2, 9, 10, 11, 12, 13
         SAVENEX CLOSE
