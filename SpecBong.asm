@@ -17,6 +17,13 @@
 
     OPT --zxnext=cspect     ;DEBUG enable break/exit fake instructions of CSpect (remove for real board)
 
+    STRUCT S_SPRITE_4B_ATTR     ; helper structure to work with 4B sprites attributes
+x       BYTE    0       ; X0:7
+y       BYTE    0       ; Y0:7
+mrx8    BYTE    0       ; PPPP Mx My Rt X8 (pal offset, mirrors, rotation, X8)
+vpat    BYTE    0       ; V 0 NNNNNN (visible, 5B type=off, pattern number 0..63)
+    ENDS
+
 ; selecting "Next" as virtual device in assembler, which allows me to set up all banks
 ; of Next (0..223 8kiB pages = 1.75MiB of memory) and page-in virtual memory
 ; with SLOT/PAGE/MMU directives as needed, to assemble code/data to different parts
@@ -116,38 +123,127 @@ UploadSpritePatternsLoop:
         dec     a
         jr      nz,UploadSpritePatternsLoop ; do 64 patterns
 
-    ; create DEBUG 8x8 grid of sprites, showing all the patterns currently uploaded
-        ld      c,$57                   ; sprite pattern-upload I/O port
-            ; sprite index is already set to 0 above, where the pattern slot was set to 0
-        ld      hl,$2020                ; X (H) = 32, Y (L) = 32
-        ; byte 3 (D) = +0 palette offset, no mirror/rotation, X.msb=0
-        ; byte 4 (E) = visible sprite = 1, 4B type (0), pattern 0
-        ld      de,%0000'0'0'0'0'1'0'000000
-DebugSpriteGridLoopRow:
-        ld      b,8                     ; 8 sprites per single row in grid
-DebugSpriteGridLoopSingleSprite:
-        ; upload 4B type of sprite attributes
-        out     (c),h   ; X
-        out     (c),l   ; Y
-        out     (c),d   ; pal.offset, mirrors/rotate, X.msb
-        out     (c),e   ; visible, 4B type, pattern number
-        ; advance position and pattern
-        inc     e                       ; ++pattern for next sprite
-        add     hl,24<<8                ; X += 24
-        djnz    DebugSpriteGridLoopSingleSprite
-        add     hl,((-24*8)<<8) + 24    ; X -= 24*8, Y += 24
+    ; ------------------------------------------------------------------------------------
+    ; Part 3 - creating base main-loop, moving few sprites around, no controls yet
+    ; ------------------------------------------------------------------------------------
+
+    ; init 32 snowballs and one player - the in-memory copy of sprite attributes
+        ; init them at some debug positions, they will for part 3 just fly around mindlessly
+        ld      ix,SprSnowballs         ; IX = address of first snowball sprite
+        ld      b,32                    ; define 32 of them
+        ld      hl,0                    ; HL will generate X positions
+        ld      e,32                    ; E will generate Y positions
+        ld      d,$80 + 52              ; visible sprite + snowball pattern (52, second is 53)
+InitBallsLoop:
+        ; set current ball data
+        ld      (ix+S_SPRITE_4B_ATTR.x),l
+        ld      (ix+S_SPRITE_4B_ATTR.y),e
+        ld      (ix+S_SPRITE_4B_ATTR.mrx8),h    ; clear pal offset, mirrors, rotate, set x8
+        ld      (ix+S_SPRITE_4B_ATTR.vpat),d
+        ; adjust initial position and pattern for next ball
+        add     hl,13                   ; 13*32 = 416: will produce X coordinates 0..511 range only
         ld      a,e
-        cp      8*8 + $80               ; sprite visible flag + pattern == 64 -> end loop
-        jr      nz,DebugSpriteGridLoopRow   ; until all 0..63 sprites/patterns are set
+        add     a,5
+        ld      e,a                     ; 5*32 = 160 pixel spread vertically
+        ld      a,d
+        xor     1                       ; alternate snowball patterns between 52/53
+        ld      d,a
+        ; advance IX to point to next snowball
+        push    de
+        ld      de,S_SPRITE_4B_ATTR
+        add     ix,de
+        pop     de
+        djnz    InitBallsLoop
+        ; init player at debug position
+        ld      ix,SprPlayer
+        ld      (ix+S_SPRITE_4B_ATTR.x),32+16   ; near left of paper area
+        ld      (ix+S_SPRITE_4B_ATTR.y),206     ; near bottom of paper area
+        ld      (ix+S_SPRITE_4B_ATTR.mrx8),0    ; clear pal offset, mirrors, rotate, x8
+        ld      (ix+S_SPRITE_4B_ATTR.vpat),$80 + 2  ; pattern "2" (player
 
-    ; do the infinite loop to not run some random memory content as code
-        jr      $
+    ; main loop of the game - first version for Part 3
+    ; (will have many shortcoming, to be resolved in later parts of tutorial)
+GameLoop:
+    ; upload sprite data from memory array to the actual HW sprite engine
+        ; reset sprite index for upload
+        ld      bc,$303B
+        xor     a
+        out     (c),a       ; select slot 0 for sprite attributes
+        ld      hl,Sprites
+        ld      bc,$57      ; B = 0 (repeat 256x), C = sprite pattern-upload I/O port
+        ; out 512 bytes in total (whole sprites buffer)
+        otir
+        otir
+    ; adjust sprite attributes in memory pointlessly (in debug way) just to see some movement
+        call    SnowballsAI
 
+    ; do the GameLoop infinitely
+        jr      GameLoop
+
+    ;-------------------------------------------------------------------------------------
+    ; "AI" subroutines
+
+SnowballsAI:
+        ld      ix,SprSnowballs
+        ld      de,S_SPRITE_4B_ATTR
+        ld      b,32
+.loop:
+        ; HL = current X coordinate (9 bit)
+        ld      l,(ix+S_SPRITE_4B_ATTR.x)
+        ld      h,(ix+S_SPRITE_4B_ATTR.mrx8)
+        ; adjust it by some +- value deducted from B (32..1 index)
+        ld      c,0         ; mirrorX flag = 0
+        ld      a,b
+        and     3           ; A = 0,1,2,3
+        sli     a           ; A = 1, 3, 5, 7
+        sub     4           ; A = -3, -1, +1, +3
+        ; do: HL += signed(A) (the "add hl,a" is "unsigned", so extra jump+adjust needed)
+        jr      nc,.moveRight
+        dec     h
+        ld      c,$08       ; mirrorX flag = 1
+.moveRight:
+        add     hl,a
+        ; put H and C together to work as palette_offset/mirror/rotate bits with X8 bit
+        ld      a,h
+        and     1           ; keep only "x8" bit
+        or      c           ; add desired mirrorX bit
+        ; store the new X coordinate and mirror/rotation flags
+        ld      (ix+S_SPRITE_4B_ATTR.x),l
+        ld      (ix+S_SPRITE_4B_ATTR.mrx8),a
+        ; alternate pattern between 52 and 53
+        ld      a,(ix+S_SPRITE_4B_ATTR.vpat)
+        xor     1
+        ld      (ix+S_SPRITE_4B_ATTR.vpat),a
+        add     ix,de       ; next snowball
+        djnz    .loop       ; do 32 of them
+        ret
+
+    ;-------------------------------------------------------------------------------------
+    ; data area
+
+        ; reserve full 128 sprites 4B type (this demo will not use 5B type sprites)
+        ALIGN   256                     ; aligned at 256B boundary w/o particular reason (yet)
+Sprites:
+        DS      128 * S_SPRITE_4B_ATTR, 0
+            ; "S_SPRITE_4B_ATTR" works as "sizeof(STRUCT), in this case it equals to 4
+
+        ; the later sprites are drawn above the earlier, so for Part 3 the sprites
+        ; 0..31 will be used for snowballs, and sprite 32 for player
+        ; adding symbols to point inside the memory reserved above
+SprSnowballs:   EQU     Sprites + 0*S_SPRITE_4B_ATTR    ; first snowball sprite at this address
+SprPlayer:      EQU     Sprites + 32*S_SPRITE_4B_ATTR   ; player sprite is here
+
+    ;-------------------------------------------------------------------------------------
     ; reserve area for stack at $B800..$BFFF region
         ORG $B800
         DS  $0800-2, $AA
 initialStackTop:
         DW  $AAAA
+
+    ;-------------------------------------------------------------------------------------
+    ; game data in different (later) banks, pre-loaded in sjasm virtual device memory
+    ; so they get stored in the NEX file, and loaded by NEX loader to desired bank
+    ;-------------------------------------------------------------------------------------
 
     ; pre-load the image pixel data from TGA file into memory (to store it in NEX file)
         ; the pixel data will be in 16k banks 9, 10, 11 (8k pages: 18, 19, .., 23)
@@ -175,6 +271,7 @@ BackGroundPalette:
 SpritePixelData:
         INCBIN "SBsprite.spr"
 
+    ;-------------------------------------------------------------------------------------
     ; all the data are in the virtual-device memory, now dump it into NEX file
         SAVENEX OPEN "SpecBong.nex", start, initialStackTop, 0, 2   ; V1.2 enforced
         SAVENEX CORE 3, 0, 0        ; core 3.0.0 required
