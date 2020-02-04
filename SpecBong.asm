@@ -17,6 +17,16 @@
 
     OPT --zxnext=cspect     ;DEBUG enable break/exit fake instructions of CSpect (remove for real board)
 
+    ; ------------------------------------------------------------------------------------
+    ; Part 4B - changing magic numbers in source to symbolic constants
+    ; ------------------------------------------------------------------------------------
+    ; the many EQU directives in the constants file are included here, the EQU does not
+    ; emit any machine code byte, just assigns certain symbolic name the numeric value
+    ; John is somewhat afraid of them, as the "names" hide the values, and I can agree
+    ; on that. So my constants for next registers and ports use suffix with the actual
+    ; value, like `ZXN_DMA_P_6B` (port $6B) or `CLIP_LAYER2_NR_18` (NextReg $18).
+    INCLUDE "constants.i.asm"
+
     STRUCT S_SPRITE_4B_ATTR     ; helper structure to work with 4B sprites attributes
 x       BYTE    0       ; X0:7
 y       BYTE    0       ; Y0:7
@@ -43,26 +53,28 @@ start:
     ; disable interrupts, we will avoid using them to keep code simpler to understand
         di
     ; make the Layer 2 visible and reset some registers (should be reset by NEXLOAD, but to be safe)
-        nextreg $69,$80         ; Layer 2 visible, ULA bank 5, Timex mode 0
-        nextreg $15,$01         ; LoRes off, layer priority SLU, sprites visible
-        nextreg $12,9           ; visible Layer 2 starts at bank 9
-        nextreg $70,0           ; 256x192x8 Layer 2 mode, L2 palette offset +0
-        nextreg $16,0           ; Layer 2 X,Y offset = [0,0]
-        nextreg $71,0           ; including the new NextReg 0x71 for cores 3.0.6+
-        nextreg $17,0
+        nextreg DISPLAY_CONTROL_NR_69,$80   ; Layer 2 visible, ULA bank 5, Timex mode 0
+        nextreg SPRITE_CONTROL_NR_15,$01    ; LoRes off, layer priority SLU, sprites visible
+        nextreg LAYER2_RAM_BANK_NR_12,9     ; visible Layer 2 starts at bank 9
+        nextreg LAYER2_CONTROL_NR_70,0      ; 256x192x8 Layer 2 mode, L2 palette offset +0
+        nextreg LAYER2_XOFFSET_NR_16,0      ; Layer 2 X,Y offset = [0,0]
+        nextreg LAYER2_XOFFSET_MSB_NR_71,0  ; including the new NextReg 0x71 for cores 3.0.6+
+        nextreg LAYER2_YOFFSET_NR_17,0
 
     ; setup Layer 2 palette - map palette data to $E000 region, to process them
-        nextreg $57,$$BackGroundPalette ; map the memory with palette to the $E000..$FFFF
+        nextreg MMU7_E000_NR_57,$$BackGroundPalette ; map the memory with palette
             ; the "$$" is special operator of sjasmplus to get memory page of particular
             ; label (the 8kiB memory page)
-        nextreg $43,%0'001'0'0'0'0      ; write to Layer 2 palette, select first palettes
-        nextreg $40,0                   ; color index
-        ld      b,0                     ; 256 colors (loop counter)
-        ld      hl,BackGroundPalette    ; address of first byte of 256x 24 bit color def.
+        nextreg PALETTE_CONTROL_NR_43,%0'001'0'0'0'0    ; write to Layer 2 palette, select first palettes
+        nextreg PALETTE_INDEX_NR_40,0       ; color index
+        ld      b,0                         ; 256 colors (loop counter)
+        ld      hl,BackGroundPalette        ; address of first byte of 256x 24 bit color def.
         ; calculate 9bit color from 24bit value for every color
         ; -> will produce pair of bytes -> write that to nextreg $44
 SetPaletteLoop:
         ; TGA palette data are three bytes per color, [B,G,R] order in memory
+        ; so palette data are: BBBbbbbb GGGggggg RRRrrrrr
+                ; (B/G/R = 3 bits for Next, b/g/r = 5bits too fine for Next, thrown away)
         ; first byte to calculate: RRR'GGG'BB
         ld      a,(hl)      ; Blue
         inc     hl
@@ -83,12 +95,12 @@ SetPaletteLoop:
         and     %111'000'00 ; top three red bits
         or      d           ; add green bits
         or      e           ; add blue bits
-        nextreg $44,a       ; RRR'GGG'BB
+        nextreg PALETTE_VALUE_9BIT_NR_44,a      ; RRR'GGG'BB
         ; second byte is: p000'000B (priority will be 0 in this app)
         xor     a
         rl      c           ; move top bit from C to bottom bit in A (Blue third bit)
         rla
-        nextreg $44,a       ; p000'000B p=0 in this image always
+        nextreg PALETTE_VALUE_9BIT_NR_44,a      ; p000'000B p=0 in this image always
         djnz    SetPaletteLoop
 
     ; the image pixel data are already in the correct banks 9,10,11 - loaded by NEX loader
@@ -105,14 +117,14 @@ SetPaletteLoop:
 
     ; upload the sprite gfx patterns to patterns memory (from regular memory - loaded by NEX loader)
         ; preconfigure the Next for uploading patterns from slot 0
-        ld      bc,$303B
+        ld      bc,SPRITE_STATUS_SLOT_SELECT_P_303B
         xor     a
         out     (c),a       ; select slot 0 for patterns (selects also index 0 for attributes)
         ; we will map full 16kiB to memory region $C000..$FFFF (to pages 25,26 with sprite pixels)
-        nextreg $56,$$SpritePixelData   ; C000..DFFF <- 8k page 25
-        nextreg $57,$$SpritePixelData+1 ; E000..FFFF <- 8k page 26
+        nextreg MMU6_C000_NR_56,$$SpritePixelData   ; C000..DFFF <- 8k page 25
+        nextreg MMU7_E000_NR_57,$$SpritePixelData+1 ; E000..FFFF <- 8k page 26
         ld      hl,SpritePixelData      ; HL = $C000 (beginning of the sprite pixels)
-        ld      bc,$5B                  ; sprite pattern-upload I/O port, B=0 (inner loop counter)
+        ld      bc,SPRITE_PATTERN_P_5B  ; sprite pattern-upload I/O port, B=0 (inner loop counter)
         ld      a,64                    ; 64 patterns (outer loop counter), each pattern is 256 bytes long
 UploadSpritePatternsLoop:
         ; upload 256 bytes of pattern data (otir increments HL and decrements B until zero)
@@ -169,11 +181,11 @@ GameLoop:
         call    WaitForScanlineUnderUla
     ; upload sprite data from memory array to the actual HW sprite engine
         ; reset sprite index for upload
-        ld      bc,$303B
+        ld      bc,SPRITE_STATUS_SLOT_SELECT_P_303B
         xor     a
         out     (c),a       ; select slot 0 for sprite attributes
         ld      hl,Sprites
-        ld      bc,$57      ; B = 0 (repeat 256x), C = sprite pattern-upload I/O port
+        ld      bc,SPRITE_ATTRIBUTE_P_57    ; B = 0 (repeat 256x), C = sprite pattern-upload I/O port
         ; out 512 bytes in total (whole sprites buffer)
         otir
         otir
@@ -248,10 +260,10 @@ WaitForScanlineUnderUla:
         ld      (TotalFrames+2),hl
 .totalFramesUpdated:
     ; read NextReg $1F - LSB of current raster line
-        ld      bc,$243B
-        ld      a,$1F
+        ld      bc,TBBLUE_REGISTER_SELECT_P_243B
+        ld      a,RASTER_LINE_LSB_NR_1F
         out     (c),a       ; select NextReg $1F
-        inc     b
+        inc     b           ; BC = TBBLUE_REGISTER_ACCESS_P_253B
     ; if already at scanline 192, then wait extra whole frame (for super-fast game loops)
 .cantStartAt192:
         in      a,(c)       ; read the raster line LSB
