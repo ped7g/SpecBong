@@ -164,6 +164,9 @@ InitBallsLoop:
     ; main loop of the game - first version for Part 3
     ; (will have many shortcoming, to be resolved in later parts of tutorial)
 GameLoop:
+    ; wait for scanline 192, so the update of sprites happens outside of visible area
+    ; this will also force the GameLoop to tick at "per frame" speed 50 or 60 FPS
+        call    WaitForScanlineUnderUla
     ; upload sprite data from memory array to the actual HW sprite engine
         ; reset sprite index for upload
         ld      bc,$303B
@@ -210,16 +213,64 @@ SnowballsAI:
         ; store the new X coordinate and mirror/rotation flags
         ld      (ix+S_SPRITE_4B_ATTR.x),l
         ld      (ix+S_SPRITE_4B_ATTR.mrx8),a
-        ; alternate pattern between 52 and 53
+        ; alternate pattern between 52 and 53 - every 8th frame (in 50Hz: 6.25FPS=160ms)
+        ; the 8th frame check is against B (counter), so not all sprites update at same frame
+        ld      a,(TotalFrames)
+        xor     b
+        and     7
+        jr      nz,.notEightFrameYet
         ld      a,(ix+S_SPRITE_4B_ATTR.vpat)
         xor     1
         ld      (ix+S_SPRITE_4B_ATTR.vpat),a
+.notEightFrameYet:
         add     ix,de       ; next snowball
         djnz    .loop       ; do 32 of them
         ret
 
+    ; ------------------------------------------------------------------------------------
+    ; Part 4 - control of game loop speed and animation speed of snowballs
+    ; ------------------------------------------------------------------------------------
+WaitForScanlineUnderUla:
+        ; because I decided early to not use interrupts to keep the code a bit simpler
+        ; (simpler to follow in mind, not having to expect any interrupt everywhere)
+        ; we will be syncing the main game loop by waiting for particular scanline
+        ; (just under the ULA paper area, i.e. scanline 192)
+    ; update the TotalFrames counter by +1
+        ld      hl,(TotalFrames)
+        inc     hl
+        ld      (TotalFrames),hl
+        ; if HL=0, increment upper 16bit too
+        ld      a,h
+        or      l
+        jr      nz,.totalFramesUpdated
+        ld      hl,(TotalFrames+2)
+        inc     hl
+        ld      (TotalFrames+2),hl
+.totalFramesUpdated:
+    ; read NextReg $1F - LSB of current raster line
+        ld      bc,$243B
+        ld      a,$1F
+        out     (c),a       ; select NextReg $1F
+        inc     b
+    ; if already at scanline 192, then wait extra whole frame (for super-fast game loops)
+.cantStartAt192:
+        in      a,(c)       ; read the raster line LSB
+        cp      192
+        jr      z,.cantStartAt192
+    ; if not yet at scanline 192, wait for it ... wait for it ...
+.waitLoop:
+        in      a,(c)       ; read the raster line LSB
+        cp      192
+        jr      nz,.waitLoop
+    ; and because the max scanline number is between 260..319 (depends on video mode),
+    ; I don't need to read MSB. 256+192 = 448 -> such scanline is not part of any mode.
+        ret
+
     ;-------------------------------------------------------------------------------------
     ; data area
+
+TotalFrames:                ; count frames for purposes of slower animations/etc
+        DD      0
 
         ; reserve full 128 sprites 4B type (this demo will not use 5B type sprites)
         ALIGN   256                     ; aligned at 256B boundary w/o particular reason (yet)
@@ -236,7 +287,7 @@ SprPlayer:      EQU     Sprites + 32*S_SPRITE_4B_ATTR   ; player sprite is here
     ;-------------------------------------------------------------------------------------
     ; reserve area for stack at $B800..$BFFF region
         ORG $B800
-        DS  $0800-2, $AA
+        DS  $0800-2, $AA    ; $AA is just debug filler of stack area
 initialStackTop:
         DW  $AAAA
 
@@ -270,6 +321,9 @@ BackGroundPalette:
         ORG $C000
 SpritePixelData:
         INCBIN "SBsprite.spr"
+
+        CSPECTMAP "SpecBong.map"    ; map file for #CSpect
+            ; to use it - add to CSpect.exe command line: -map=SpecBong.map
 
     ;-------------------------------------------------------------------------------------
     ; all the data are in the virtual-device memory, now dump it into NEX file
