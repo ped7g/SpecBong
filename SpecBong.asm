@@ -27,6 +27,12 @@
     ; value, like `ZXN_DMA_P_6B` (port $6B) or `CLIP_LAYER2_NR_18` (NextReg $18).
     INCLUDE "constants.i.asm"
 
+    ; ------------------------------------------------------------------------------------
+    ; Part 4C - adding performance "measuring" by color stripes in border
+    ; it will assemble conditionaly, when DEFINE is active
+    DEFINE  DISPLAY_PERFORMANCE_DEBUG_BORDER    ; enable the color stripes in border
+MAIN_BORDER_COLOR       EQU     1
+
     STRUCT S_SPRITE_4B_ATTR     ; helper structure to work with 4B sprites attributes
 x       BYTE    0       ; X0:7
 y       BYTE    0       ; Y0:7
@@ -179,6 +185,11 @@ GameLoop:
     ; wait for scanline 192, so the update of sprites happens outside of visible area
     ; this will also force the GameLoop to tick at "per frame" speed 50 or 60 FPS
         call    WaitForScanlineUnderUla
+        IFDEF DISPLAY_PERFORMANCE_DEBUG_BORDER
+            ; red border: to measure the sprite upload time by tallness of the border stripe
+            ld      a,2
+            out     (ULA_P_FE),a
+        ENDIF
     ; upload sprite data from memory array to the actual HW sprite engine
         ; reset sprite index for upload
         ld      bc,SPRITE_STATUS_SLOT_SELECT_P_303B
@@ -189,6 +200,11 @@ GameLoop:
         ; out 512 bytes in total (whole sprites buffer)
         otir
         otir
+        IFDEF DISPLAY_PERFORMANCE_DEBUG_BORDER
+            ; magenda border: to measure the AI code performance
+            ld      a,3
+            out     (ULA_P_FE),a
+        ENDIF
     ; adjust sprite attributes in memory pointlessly (in debug way) just to see some movement
         call    SnowballsAI
 
@@ -251,6 +267,9 @@ WaitForScanlineUnderUla:
         ld      hl,(TotalFrames)
         inc     hl
         ld      (TotalFrames),hl
+        ; turn the border to the "main" color during wait
+        ld      a,MAIN_BORDER_COLOR
+        out     (ULA_P_FE),a
         ; if HL=0, increment upper 16bit too
         ld      a,h
         or      l
