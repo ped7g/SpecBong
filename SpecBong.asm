@@ -19,6 +19,11 @@
 
     ; include symbolic names for "magic numbers" like NextRegisters and I/O ports
     INCLUDE "constants.i.asm"
+JOY_BIT_RIGHT           EQU     0
+JOY_BIT_LEFT            EQU     1
+JOY_BIT_DOWN            EQU     2
+JOY_BIT_UP              EQU     3
+JOY_BIT_FIRE            EQU     4
 
     DEFINE  DISPLAY_PERFORMANCE_DEBUG_BORDER    ; enable the color stripes in border
 MAIN_BORDER_COLOR       EQU     1
@@ -182,11 +187,105 @@ GameLoop:
     ; adjust sprite attributes in memory pointlessly (in debug way) just to see some movement
         call    SnowballsAI
 
+    ;-------------------------------------------------------------------------------------
+    ; Part 5 - adding controls to main character - just DEBUG free move around full PAPER
+        IFDEF DISPLAY_PERFORMANCE_DEBUG_BORDER
+            ; green border: to measure the player AI code performance
+            ld      a,4
+            out     (ULA_P_FE),a
+        ENDIF
+        call    ReadInputDevices
+        call    Player1MoveByControls
+
     ; do the GameLoop infinitely
         jr      GameLoop
 
     ;-------------------------------------------------------------------------------------
     ; "AI" subroutines
+
+Player1MoveByControls:
+    ; update "cooldown" of fire button to allow it only once per 10 frames
+        ld      a,(Player1FireCoolDown)
+        sub     1           ; SUB to update also carry flag
+        adc     a,0         ; clamp the value to 0 to not go -1
+        ld      (Player1FireCoolDown),a
+    ; just DEBUG: up/down/left/right over whole screen, fire changing animation frame
+        ld      ix,SprPlayer
+        ld      a,(Player1Controls)
+        ld      b,a         ; keep control bits around in B for simplicity
+        ; HL = current X coordinate (9 bit)
+        ld      l,(ix+S_SPRITE_4B_ATTR.x)
+        ld      h,(ix+S_SPRITE_4B_ATTR.mrx8)
+        ld      c,h         ; preserve current mirrorX
+        bit     JOY_BIT_RIGHT,b
+        jr      z,.notGoingRight
+        inc     hl
+        inc     hl          ; X += 2
+        res     3,c         ; mirrorX=0 (face right)
+.notGoingRight:
+        bit     JOY_BIT_LEFT,b
+        jr      z,.notGoingLeft
+        dec     hl
+        dec     hl          ; X -= 2
+        set     3,c         ; mirrorX=1 (face left)
+.notGoingLeft:
+        ; sanitize HL to values range 32..271 (16px sprite fully visible in PAPER area)
+        ld      de,32
+        ; first clear top bits of H to keep only "x8" bit of it (remove mirrors/rot/pal data)
+        rr      h           ; Fcarry = x8
+        ld      h,0
+        rl      h           ; x8 back to H, Fcarry=0 (for sbc)
+        sbc     hl,de
+        add     hl,de       ; Fc=1 when HL is 0..31
+        jr      nc,.XposIs32plus
+        ex      de,hl       ; for 0..31 reset the Xpos=HL=32
+.XposIs32plus:
+        ld      de,32+256-16    ; 272 - first position when sprite has one px in border
+        or      a           ; Fc=0
+        sbc     hl,de
+        add     hl,de       ; Fc=1 when HL is 32..271
+        jr      c,.XposIsValid
+        ex      de,hl
+        dec     hl          ; for 272+ reset the Xpos=HL=271
+.XposIsValid:
+        ; store the sanitized X post and new mirrorX to player sprite values
+        ld      a,c
+        and     ~1          ; clear x8 bit (preserves only mirror/rotate/...)
+        or      h           ; merge x8 back
+        ld      (ix+S_SPRITE_4B_ATTR.x),l
+        ld      (ix+S_SPRITE_4B_ATTR.mrx8),a
+        ; vertical movement
+        ld      a,(ix+S_SPRITE_4B_ATTR.y)
+        bit     JOY_BIT_UP,b
+        jr      z,.notGoingUp
+        dec     a
+        dec     a           ; Y -= 2
+        cp      32          ; sanitize right here
+        jr      nc,.notGoingUp
+        ld      a,32        ; 0..31 -> Y=32
+.notGoingUp:
+        bit     JOY_BIT_DOWN,b
+        jr      z,.notGoingDown
+        inc     a
+        inc     a           ; Y += 2
+        cp      32+192-16   ; sanitize right here (208+ is outside of PAPER area)
+        jr      c,.notGoingDown
+        ld      a,32+192-16-1   ; 208..255 -> Y=207
+.notGoingDown:
+        ld      (ix+S_SPRITE_4B_ATTR.y),a
+        ; change through all 64 sprite patterns when pressing fire
+        bit     JOY_BIT_FIRE,b
+        ret     z           ; Player1 movement done - no fire button
+        ld      a,(Player1FireCoolDown)
+        or      a
+        ret     nz          ; check "cooldown" of fire, ignore button if still cooling down
+        ld      a,10
+        ld      (Player1FireCoolDown),a     ; set new "cooldown" if pattern will change
+        ld      a,(ix+S_SPRITE_4B_ATTR.vpat)
+        inc     a
+        and     ~64         ; force the pattern to stay 0..63 and keep +128 for "visible"
+        ld      (ix+S_SPRITE_4B_ATTR.vpat),a
+        ret
 
 SnowballsAI:
         ld      ix,SprSnowballs
@@ -227,6 +326,40 @@ SnowballsAI:
 .notEightFrameYet:
         add     ix,de       ; next snowball
         djnz    .loop       ; do all of them
+        ret
+
+    ;-------------------------------------------------------------------------------------
+    ; utility subroutines
+
+ReadInputDevices:
+        ; read Kempston port first, will also clear the inputs
+        in      a,(KEMPSTON_JOY1_P_1F)
+        ld      e,a         ; E = the Kempston/MD joystick inputs (---FUDLR)
+        ; mix the joystick inputs with OPQA<space>
+        ld      d,$FF       ; keyboard reading bits are 1=released, 0=pressed -> $FF = no key
+        ld      a,~(1<<7)   ; eight row of matrix (<space><symbol shift>MNB)
+        in      a,(ULA_P_FE)
+        rrca                ; Fcarry = <space>
+        rl      d
+        ld      a,~(1<<2)   ; third row of matrix (QWERT)
+        in      a,(ULA_P_FE)
+        rrca                ; Fcarry = Q
+        rl      d
+        ld      a,~(1<<1)   ; second row of matrix (ASDFG)
+        in      a,(ULA_P_FE)
+        rrca                ; Fcarry = A
+        rl      d
+        ld      a,~(1<<5)   ; sixth row of matrix (POIUY)
+        in      a,(ULA_P_FE)
+        rra
+        rra                 ; Fcarry = O ("P" is now in bit 7)
+        rl      d
+        rla                 ; Fcarry = P
+        ld      a,d
+        rla                 ; A is complete <fire><up><down><left><right>, but inverted
+        cpl                 ; invert the readings, now 1 = pressed, 0 = no key
+        or      e           ; mix the keyboard readings together with joystick
+        ld      (Player1Controls),a     ; store the inputs for AI routine
         ret
 
 WaitForScanlineUnderUla:
@@ -273,6 +406,12 @@ WaitForScanlineUnderUla:
 
 TotalFrames:                ; count frames for purposes of slower animations/etc
         DD      0
+
+    ; bits encoding inputs as Kempston/MD: https://wiki.specnext.dev/Kempston_Joystick
+Player1Controls:
+        DB      0
+Player1FireCoolDown:
+        DB      0
 
         ; reserve full 128 sprites 4B type (this demo will not use 5B type sprites)
         ALIGN   256                     ; aligned at 256B boundary w/o particular reason (yet)
