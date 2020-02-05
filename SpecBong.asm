@@ -17,19 +17,9 @@
 
     OPT --zxnext=cspect     ;DEBUG enable break/exit fake instructions of CSpect (remove for real board)
 
-    ; ------------------------------------------------------------------------------------
-    ; Part 4B - changing magic numbers in source to symbolic constants
-    ; ------------------------------------------------------------------------------------
-    ; the many EQU directives in the constants file are included here, the EQU does not
-    ; emit any machine code byte, just assigns certain symbolic name the numeric value
-    ; John is somewhat afraid of them, as the "names" hide the values, and I can agree
-    ; on that. So my constants for next registers and ports use suffix with the actual
-    ; value, like `ZXN_DMA_P_6B` (port $6B) or `CLIP_LAYER2_NR_18` (NextReg $18).
+    ; include symbolic names for "magic numbers" like NextRegisters and I/O ports
     INCLUDE "constants.i.asm"
 
-    ; ------------------------------------------------------------------------------------
-    ; Part 4C - adding performance "measuring" by color stripes in border
-    ; it will assemble conditionaly, when DEFINE is active
     DEFINE  DISPLAY_PERFORMANCE_DEBUG_BORDER    ; enable the color stripes in border
 MAIN_BORDER_COLOR       EQU     1
 
@@ -42,8 +32,7 @@ vpat    BYTE    0       ; V 0 NNNNNN (visible, 5B type=off, pattern number 0..63
 
 ; selecting "Next" as virtual device in assembler, which allows me to set up all banks
 ; of Next (0..223 8kiB pages = 1.75MiB of memory) and page-in virtual memory
-; with SLOT/PAGE/MMU directives as needed, to assemble code/data to different parts
-; of memory
+; with SLOT/PAGE/MMU directives
     DEVICE ZXSPECTRUMNEXT
 
 ; the default mapping of memory is 16k banks: 7, 5, 2, 0 (8k pages: 14,15,10,11,4,5,0,1)
@@ -53,8 +42,8 @@ vpat    BYTE    0       ; V 0 NNNNNN (visible, 5B type=off, pattern number 0..63
 ; $8000..BFFF is here Bank 2 (pages 4 and 5) -> we will put **all** code here
     ORG $8000
 start:
-    ; break at start when running in CSpect with "-brk" option
-        break : nop : nop       ; 2x"nop" after "break" to make real board survive "break" (= ld bc,0)
+    ; break at start when running in CSpect with "-brk" option (`DD 01` is "break" in CSpect)
+        break : nop : nop   ; but `DD 01` on Z80 is `ld bc,nn`, so adding 2x nop after = `ld bc,0`
 
     ; disable interrupts, we will avoid using them to keep code simpler to understand
         di
@@ -69,8 +58,6 @@ start:
 
     ; setup Layer 2 palette - map palette data to $E000 region, to process them
         nextreg MMU7_E000_NR_57,$$BackGroundPalette ; map the memory with palette
-            ; the "$$" is special operator of sjasmplus to get memory page of particular
-            ; label (the 8kiB memory page)
         nextreg PALETTE_CONTROL_NR_43,%0'001'0'0'0'0    ; write to Layer 2 palette, select first palettes
         nextreg PALETTE_INDEX_NR_40,0       ; color index
         ld      b,0                         ; 256 colors (loop counter)
@@ -112,12 +99,7 @@ SetPaletteLoop:
     ; the image pixel data are already in the correct banks 9,10,11 - loaded by NEX loader
         ; nothing to do with the pixel data - we are done
 
-    ; ------------------------------------------------------------------------------------
-    ; Part 2 - uploading sprite graphics and debug-display of all gfx patterns in 8x8 grid
-    ; (the debug display does already use HW sprites to show all gfx patterns)
-    ; ------------------------------------------------------------------------------------
-
-    ; sprite gfx does use the default palette: color[i] = convert8bitColorTo9bit(i);
+    ; SpecBong sprite gfx does use the default palette: color[i] = convert8bitColorTo9bit(i);
     ; which is set by the NEX loader in the first sprite palette
         ; nothing to do here in the code with sprite palette
 
@@ -135,20 +117,13 @@ SetPaletteLoop:
 UploadSpritePatternsLoop:
         ; upload 256 bytes of pattern data (otir increments HL and decrements B until zero)
         otir                            ; B=0 ahead, so otir will repeat 256x ("dec b" wraps 0 to 255)
-            ; you can use F7 in CSpect debugger to single step over each iteration to see how
-            ; the B wraps from initial 00 to FF, FE, ... until 00 again, doing 256x `outi`
-            ; or you can use F8 to do the whole `otir` in single step-over way
         dec     a
         jr      nz,UploadSpritePatternsLoop ; do 64 patterns
 
-    ; ------------------------------------------------------------------------------------
-    ; Part 3 - creating base main-loop, moving few sprites around, no controls yet
-    ; ------------------------------------------------------------------------------------
-
     ; init 32 snowballs and one player - the in-memory copy of sprite attributes
-        ; init them at some debug positions, they will for part 3 just fly around mindlessly
+        ; init them at some debug positions, they just fly around mindlessly
         ld      ix,SprSnowballs         ; IX = address of first snowball sprite
-        ld      b,32                    ; define 32 of them
+        ld      b,SNOWBALLS_CNT         ; define all of them
         ld      hl,0                    ; HL will generate X positions
         ld      e,32                    ; E will generate Y positions
         ld      d,$80 + 52              ; visible sprite + snowball pattern (52, second is 53)
@@ -179,8 +154,7 @@ InitBallsLoop:
         ld      (ix+S_SPRITE_4B_ATTR.mrx8),0    ; clear pal offset, mirrors, rotate, x8
         ld      (ix+S_SPRITE_4B_ATTR.vpat),$80 + 2  ; pattern "2" (player
 
-    ; main loop of the game - first version for Part 3
-    ; (will have many shortcoming, to be resolved in later parts of tutorial)
+    ; main loop of the game
 GameLoop:
     ; wait for scanline 192, so the update of sprites happens outside of visible area
     ; this will also force the GameLoop to tick at "per frame" speed 50 or 60 FPS
@@ -217,7 +191,7 @@ GameLoop:
 SnowballsAI:
         ld      ix,SprSnowballs
         ld      de,S_SPRITE_4B_ATTR
-        ld      b,32
+        ld      b,SNOWBALLS_CNT
 .loop:
         ; HL = current X coordinate (9 bit)
         ld      l,(ix+S_SPRITE_4B_ATTR.x)
@@ -252,12 +226,9 @@ SnowballsAI:
         ld      (ix+S_SPRITE_4B_ATTR.vpat),a
 .notEightFrameYet:
         add     ix,de       ; next snowball
-        djnz    .loop       ; do 32 of them
+        djnz    .loop       ; do all of them
         ret
 
-    ; ------------------------------------------------------------------------------------
-    ; Part 4 - control of game loop speed and animation speed of snowballs
-    ; ------------------------------------------------------------------------------------
 WaitForScanlineUnderUla:
         ; because I decided early to not use interrupts to keep the code a bit simpler
         ; (simpler to follow in mind, not having to expect any interrupt everywhere)
@@ -309,11 +280,12 @@ Sprites:
         DS      128 * S_SPRITE_4B_ATTR, 0
             ; "S_SPRITE_4B_ATTR" works as "sizeof(STRUCT), in this case it equals to 4
 
-        ; the later sprites are drawn above the earlier, so for Part 3 the sprites
+        ; the later sprites are drawn above the earlier, current allocation:
         ; 0..31 will be used for snowballs, and sprite 32 for player
         ; adding symbols to point inside the memory reserved above
+SNOWBALLS_CNT   EQU     32
 SprSnowballs:   EQU     Sprites + 0*S_SPRITE_4B_ATTR    ; first snowball sprite at this address
-SprPlayer:      EQU     Sprites + 32*S_SPRITE_4B_ATTR   ; player sprite is here
+SprPlayer:      EQU     Sprites + SNOWBALLS_CNT*S_SPRITE_4B_ATTR    ; player sprite is here
 
     ;-------------------------------------------------------------------------------------
     ; reserve area for stack at $B800..$BFFF region
@@ -360,7 +332,7 @@ SpritePixelData:
     ; all the data are in the virtual-device memory, now dump it into NEX file
         SAVENEX OPEN "SpecBong.nex", start, initialStackTop, 0, 2   ; V1.2 enforced
         SAVENEX CORE 3, 0, 0        ; core 3.0.0 required
-        SAVENEX CFG 1               ; blue border (as debug)
+        SAVENEX CFG MAIN_BORDER_COLOR      ; main border color already during load
         SAVENEX AUTO                ; dump all modified banks into NEX file
             ; currently the 16k Banks stored will be: 2, 9, 10, 11, 12, 13
         SAVENEX CLOSE
