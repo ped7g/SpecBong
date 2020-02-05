@@ -22,7 +22,7 @@ The background image is in Layer2 256x192x8 mode, static image from BMP file, HW
 
 ### What is in this repository
 
-All the code and data required to build the final NEX file, with commits history to check the evolution of the project from beginning. Particular commits are marked with "Part_#number" tag, which will be referenced from the tutorial text.
+All the code and data required to build the final NEX file, with commits history to check the evolution of the project from beginning. Particular commits are marked with "Part_#number" tag, which will be referenced from the tutorial text and you can download the sources and NEX file for each stage at [releases](https://github.com/ped7g/SpecBong/releases).
 
 The tutorial text is (will be) in the ["wiki" part](https://github.com/ped7g/SpecBong/wiki) of this repository. It is written by John, reading the source code after each part was done, with his own experience how he understands the code, what he did to set up his environment and replicate the results and other insight, giving another angle on the project than the (heavily commented) source itself.
 
