@@ -229,7 +229,7 @@ Player1MoveByControls:
         dec     hl          ; X -= 2
         set     3,c         ; mirrorX=1 (face left)
 .notGoingLeft:
-        ; sanitize HL to values range 32..271 (16px sprite fully visible in PAPER area)
+        ; sanitize HL to values range 32..272 (16px sprite fully visible in PAPER area)
         ld      de,32
         ; first clear top bits of H to keep only "x8" bit of it (remove mirrors/rot/pal data)
         rr      h           ; Fcarry = x8
@@ -239,14 +239,14 @@ Player1MoveByControls:
         add     hl,de       ; Fc=1 when HL is 0..31
         jr      nc,.XposIs32plus
         ex      de,hl       ; for 0..31 reset the Xpos=HL=32
-.XposIs32plus:
-        ld      de,32+256-16    ; 272 - first position when sprite has one px in border
+.XposIs32plus:              ; (there was "272" constant in previous part => bug, now fixed)
+        ld      de,32+256-16+1  ; 273 - first position when sprite has one px in border
         or      a           ; Fc=0
         sbc     hl,de
-        add     hl,de       ; Fc=1 when HL is 32..271
+        add     hl,de       ; Fc=1 when HL is 32..272
         jr      c,.XposIsValid
         ex      de,hl
-        dec     hl          ; for 272+ reset the Xpos=HL=271
+        dec     hl          ; for 273+ reset the Xpos=HL=272
 .XposIsValid:
         ; store the sanitized X post and new mirrorX to player sprite values
         ld      a,c
@@ -268,9 +268,9 @@ Player1MoveByControls:
         jr      z,.notGoingDown
         inc     a
         inc     a           ; Y += 2
-        cp      32+192-16   ; sanitize right here (208+ is outside of PAPER area)
+        cp      32+192-16+1 ; sanitize right here (209+ is outside of PAPER area)
         jr      c,.notGoingDown
-        ld      a,32+192-16-1   ; 208..255 -> Y=207
+        ld      a,32+192-16 ; 209..255 -> Y=208 (was 207 in previous part = bug)
 .notGoingDown:
         ld      (ix+S_SPRITE_4B_ATTR.y),a
         ; change through all 64 sprite patterns when pressing fire
