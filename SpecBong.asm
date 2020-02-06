@@ -125,10 +125,10 @@ UploadSpritePatternsLoop:
         dec     a
         jr      nz,UploadSpritePatternsLoop ; do 64 patterns
 
-    ; init 32 snowballs and one player - the in-memory copy of sprite attributes
+    ; init SNOWBALLS_CNT snowballs and one player - the in-memory copy of sprite attributes
         ; init them at some debug positions, they just fly around mindlessly
         ld      ix,SprSnowballs         ; IX = address of first snowball sprite
-        ld      b,SNOWBALLS_CNT         ; define all of them
+        ld      b,SNOWBALLS_CNT-1       ; define all of them except last one
         ld      hl,0                    ; HL will generate X positions
         ld      e,32                    ; E will generate Y positions
         ld      d,$80 + 52              ; visible sprite + snowball pattern (52, second is 53)
@@ -152,6 +152,12 @@ InitBallsLoop:
         add     ix,de
         pop     de
         djnz    InitBallsLoop
+        ; init the last snowball for testing collisions code (will just stand near bottom)
+        ld      (ix+S_SPRITE_4B_ATTR.x),100
+        ld      (ix+S_SPRITE_4B_ATTR.y),192
+        ld      (ix+S_SPRITE_4B_ATTR.mrx8),0
+        ld      (ix+S_SPRITE_4B_ATTR.vpat),d
+
         ; init player at debug position
         ld      ix,SprPlayer
         ld      (ix+S_SPRITE_4B_ATTR.x),32+16   ; near left of paper area
@@ -196,9 +202,118 @@ GameLoop:
         ENDIF
         call    ReadInputDevices
         call    Player1MoveByControls
+        call    SnowballvsPlayerCollision
 
     ; do the GameLoop infinitely
         jr      GameLoop
+
+    ;-------------------------------------------------------------------------------------
+    ; Part 6 - writing + testing the collision detection player vs snowball (only player vs balls)
+    ; because only player vs balls is checked, there's no smart optimization like "buckets"
+    ; sorting first sprites into groups which may interact, etc... just simple O(N) loop
+    ; checking every ball against player position
+    ; (BTW I did use +-1px player movement to debug the collision code, if you are wondering)
+SnowballvsPlayerCollision:
+        IFDEF DISPLAY_PERFORMANCE_DEBUG_BORDER
+            ; green border: to measure the collisions code performance
+            ld      a,5
+            out     (ULA_P_FE),a
+        ENDIF
+        ; read player position into registers
+        ld      ix,SprPlayer
+        ld      l,(ix+S_SPRITE_4B_ATTR.x)
+        ld      h,(ix+S_SPRITE_4B_ATTR.mrx8)
+        ; "normalize" X coordinate to have coordinate system 0,0 .. 255,191 (PAPER area)
+        ; and to have coordinates of centre of player sprite (+7,+7)
+        ; It's more code (worse performance), but data will fit into 8bit => less registers
+        add     hl,-32+7                ; X normalized, it fits 8bit now (H will be reused)
+        ld      a,(ix+S_SPRITE_4B_ATTR.y)
+        add     a,-32+8
+        ld      h,a                     ; Y normalized, HL = [x,y] of player for tests
+        ; init IY to point to specialFX dynamic part of sprites displaying collision effect
+        ld      iy,SprCollisionFx
+        ld      ix,SprSnowballs
+        ld      bc,SNOWBALLS_CNT<<8     ; B = snowballs count, C = 0 (collisions counter)
+.snowballLoop:
+    ; the collision detection will use circle formula (x*x+y*y=r*r), but we will first reject
+    ; the fine-calculation by box-check, player must be +-15px (cetre vs centre) near ball
+    ; to do the fine centres distance test (16*16=256 => overflow in the simplified MUL logic)
+        ; read and normalize snowball pos X
+        ld      e,(ix+S_SPRITE_4B_ATTR.x)
+        ld      d,(ix+S_SPRITE_4B_ATTR.mrx8)
+        add     de,-32+7                ; DE = normalized X (only E will be used later)
+        rr      d                       ; check x8
+        jr      c,.skipCollisionCheck   ; ignore balls outside of 0..255 positions (half of ball visible at most)
+        ld      a,(ix+S_SPRITE_4B_ATTR.y)
+        add     a,-32+7+3               ; snowball sprites is only in bottom 11px of 16x16 -> +3 shift
+        jr      nc,.skipCollisionCheck  ; this ball is too high in the border (just partially visible), ignore it
+        sub     h                       ; A = dY = ball.Y - player.Y
+        ; reject deltas which are too big
+        ld      d,a
+        add     a,15
+        cp      31
+        jr      nc,.skipCollisionCheck  ; deltaY is more than +-15 pixels, ignore it
+        ld      a,e
+        sub     l                       ; A = dX = ball.X - player.X
+        ; check also X delta for -16..+15 range
+        add     a,15
+        cp      31
+        jr      nc,.skipCollisionCheck
+        sub     15
+        ; both deltas are -16..+15, use the dX*dX + dY*dY to check the distance between sprites
+        ; the 2D distance will in this case work quite well, because snowballs are like circle
+        ; So no need to do pixel-masks collision
+        ld      e,d
+        mul     de                      ; E = dY * dY  (low 8 bits are correct for negative dY)
+        ld      d,a
+        ld      a,e
+        ld      e,d
+        mul     de                      ; E = dX * dX
+        add     a,e
+        jr      c,.skipCollisionCheck   ; dY*dY + dX*dX is 256+ -> no collision
+        cp      (6+5)*(6+5)             ; check against radius 6+5px, if less -> collision
+            ; 6px is snowball radius, 5px is the player radius, being a bit benevolent (a lot)
+        jr      nc,.skipCollisionCheck
+        ; collision detected, create new effectFx sprite at the snowbal possition
+        inc     c                       ; collision counter
+        ld      e,(ix+S_SPRITE_4B_ATTR.x)       ; copy the data from snowball sprite
+        ld      a,(ix+S_SPRITE_4B_ATTR.y)
+        add     a,2                     ; +2 down
+        ld      d,(ix+S_SPRITE_4B_ATTR.mrx8)
+        ld      (iy+S_SPRITE_4B_ATTR.x),e
+        ld      (iy+S_SPRITE_4B_ATTR.y),a
+        ld      (iy+S_SPRITE_4B_ATTR.mrx8),d
+        ld      (iy+S_SPRITE_4B_ATTR.vpat),$80 + 61 ; pattern 61 + visible
+        ld      de,S_SPRITE_4B_ATTR
+        add     iy,de                   ; advance collisionFx sprite ptr
+.skipCollisionCheck:
+        ; next snowball, do them all
+        ld      de,S_SPRITE_4B_ATTR
+        add     ix,de
+        djnz    .snowballLoop
+        ; clear the old collisionFx sprites from previous frame
+        ld      a,(CollisionFxCount)
+        sub     c
+        jr      c,.noFxToRemove
+        jr      z,.noFxToRemove
+        ld      b,a                     ; fx sprites to make invisible
+.removeFxLoop:
+        ld      (iy+S_SPRITE_4B_ATTR.vpat),d    ; DE = 4 -> D=0
+        add     iy,de
+        djnz    .removeFxLoop
+.noFxToRemove:
+        ld      a,c
+        ld      (CollisionFxCount),a    ; remember new amount of collision FX sprites
+        ; also modify players palette offset by count of collisions (for fun)
+        swapnib
+        and     $F0
+        ld      c,a
+        ld      ix,SprPlayer
+        ld      a,(ix+S_SPRITE_4B_ATTR.mrx8)
+        and     $0F
+        or      c
+        ld      (ix+S_SPRITE_4B_ATTR.mrx8),a
+        ret
 
     ;-------------------------------------------------------------------------------------
     ; "AI" subroutines
@@ -290,7 +405,7 @@ Player1MoveByControls:
 SnowballsAI:
         ld      ix,SprSnowballs
         ld      de,S_SPRITE_4B_ATTR
-        ld      b,SNOWBALLS_CNT
+        ld      b,SNOWBALLS_CNT-1   ; move all of them except last
 .loop:
         ; HL = current X coordinate (9 bit)
         ld      l,(ix+S_SPRITE_4B_ATTR.x)
@@ -406,6 +521,8 @@ WaitForScanlineUnderUla:
 
 TotalFrames:                ; count frames for purposes of slower animations/etc
         DD      0
+CollisionFxCount:           ; count the dynamically created extra FX sprites displaying collision
+        DB      0
 
     ; bits encoding inputs as Kempston/MD: https://wiki.specnext.dev/Kempston_Joystick
 Player1Controls:
@@ -420,11 +537,15 @@ Sprites:
             ; "S_SPRITE_4B_ATTR" works as "sizeof(STRUCT), in this case it equals to 4
 
         ; the later sprites are drawn above the earlier, current allocation:
-        ; 0..31 will be used for snowballs, and sprite 32 for player
-        ; adding symbols to point inside the memory reserved above
-SNOWBALLS_CNT   EQU     32
+            ; SNOWBALLS_CNT will be used for snowballs
+            ; next sprite for player
+            ; then max SNOWBALLS_CNT are for collision sparks (will render above player) (FX sprite)
+
+        ; adding symbols to point inside the Sprites memory reserved above
+SNOWBALLS_CNT   EQU     28
 SprSnowballs:   EQU     Sprites + 0*S_SPRITE_4B_ATTR    ; first snowball sprite at this address
 SprPlayer:      EQU     Sprites + SNOWBALLS_CNT*S_SPRITE_4B_ATTR    ; player sprite is here
+SprCollisionFx: EQU     SprPlayer + S_SPRITE_4B_ATTR
 
     ;-------------------------------------------------------------------------------------
     ; reserve area for stack at $B800..$BFFF region
