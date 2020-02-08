@@ -204,6 +204,11 @@ GameLoop:
         call    Player1MoveByControls
         call    SnowballvsPlayerCollision
 
+    IF 0    ; DEBUG wait for fire key after frame
+.waitForFire:       call ReadInputDevices : ld a,(Player1Controls) : bit JOY_BIT_FIRE,a : jr z,.waitForFire
+.waitForRelease:    call ReadInputDevices : ld a,(Player1Controls) : bit JOY_BIT_FIRE,a : jr nz,.waitForRelease
+    ENDIF
+
     ; do the GameLoop infinitely
         jr      GameLoop
 
@@ -238,6 +243,8 @@ SnowballvsPlayerCollision:
     ; the collision detection will use circle formula (x*x+y*y=r*r), but we will first reject
     ; the fine-calculation by box-check, player must be +-15px (cetre vs centre) near ball
     ; to do the fine centres distance test (16*16=256 => overflow in the simplified MUL logic)
+        bit     7,(ix+S_SPRITE_4B_ATTR.vpat)
+        jr      z,.skipCollisionCheck   ; ball is invisible, skip the test
         ; read and normalize snowball pos X
         ld      e,(ix+S_SPRITE_4B_ATTR.x)
         ld      d,(ix+S_SPRITE_4B_ATTR.mrx8)
@@ -314,6 +321,60 @@ SnowballvsPlayerCollision:
         or      c
         ld      (ix+S_SPRITE_4B_ATTR.mrx8),a
         ret
+
+    ;-------------------------------------------------------------------------------------
+    ; Part 7 - platforms collisions
+    ; These don't check the image pixels, but instead there are few columns accross
+    ; the screen, and for each column there can be 8 platforms defined. These data are
+    ; hand-tuned for the background image. Each column is 16px wide, so there are 16 columns
+    ; per PAPER area. But the background is actually only 192x192 (12 columns), and I will
+    ; define +1 column extra on each side in case some sprite is partially out of screen.
+    ; Single column data is 16 bytes: 8x[height of platform, extras] where extras will be
+    ; 8bit flags for things like ladders/etc.
+
+GetPlatformPosUnder:
+    ; In: IX = sprite pointer (centre x-coordinate is used for collision, i.e. +8)
+    ; Out: A = platform coordinate (in sprite coordinates 0..255), C = extras byte
+    ; for X coordinate outside of range, or very low Y the [A:255, C:0] is always returned
+        push    hl
+        call    .implementation
+        ; returns through here only when outside of range or no platform found
+        ld      a,255
+        ld      c,0
+        pop     hl
+        ret
+.implementation:
+        bit     0,(ix+S_SPRITE_4B_ATTR.mrx8)
+        ret     nz          ; 256..511 is invalid X range (no column data)
+        ld      a,(ix+S_SPRITE_4B_ATTR.x)
+        sub     16-8        ; -16 to skip 16px, +8 to test centre of sprite (not left edge)
+        ret     c           ; 0..7 is invalid X range (no column data)
+    ; each column is 8 platforms x2 bytes = 16 bytes -> the X coordinate top 4 bits
+    ; are indentical to address of particular column! (no need to multiply/divide)
+        cp      low PlatformsCollisionDataEnd
+        ret     nc          ; 224 <= (X-16) -> invalid X range  (224 = 14*16) - 14 columns are defined
+        and     -16         ; clear the bottom four bits of X -> becomes low-byte of address
+        ld      l,a
+        ld      h,high PlatformsCollisionData   ; HL = address of column data
+        ld      a,(ix+S_SPRITE_4B_ATTR.y)       ; raw sprite Y (top edge)
+        cp      255-13
+        ret     nc          ; already too low to even check (after +13 only 13..254 are valid for check)
+        add     a,13        ; the base-line coordinate, the sprite can be 2px deep into platform to "hit" it
+    ; now we are ready to compare against the data in column table
+        jr      .columnDataLoopEntry
+.columnDataLoop:
+        inc     l
+        inc     l
+.columnDataLoopEntry:
+        cp      (hl)
+        jr      nc,.columnDataLoop  ; platformY <= spriteY_base_line -> will not catch this one
+    ; this platform is below baseline, report it as hit
+        ld      a,(hl)
+        inc     l
+        ld      c,(hl)
+        pop     hl          ; discard return address from .implementation
+        pop     hl          ; restore HL
+        ret                 ; return directly to caller with results in A and C
 
     ;-------------------------------------------------------------------------------------
     ; "AI" subroutines
@@ -407,15 +468,40 @@ SnowballsAI:
         ld      de,S_SPRITE_4B_ATTR
         ld      b,SNOWBALLS_CNT-1   ; move all of them except last
 .loop:
+        bit     7,(ix+S_SPRITE_4B_ATTR.vpat)
+        jr      z,.doNextSnowball   ; if the sprite is not visible, don't process it
+        ; check the Y coordinate against platform's collisions
+        call    GetPlatformPosUnder
+        sub     16          ; snowball wants platform at +16 (bottom of ball is bottom of sprite)
+        cp      (ix+S_SPRITE_4B_ATTR.y)
+        jr      z,.isInOrAtPlatform ; at plaform
+        jr      c,.isInOrAtPlatform ; in platform (will reset Y to be *at*)
+        ld      l,a         ; keep the platformY for compare
+        ; falling, keep the previous direction (extracted from mirroX flag into C=0/1)
+        ld      c,0
+        bit     3,(ix+S_SPRITE_4B_ATTR.mrx8)    ; mirroX bit
+        jr      z,.fallingRight
+        inc     c           ; falling left
+.fallingRight
+        ld      a,(ix+S_SPRITE_4B_ATTR.y)
+        inc     a           ; Y += 1
+        cp      l           ; did it land at platform now?
+        adc     a,0         ; if not, do another Y += 1 (falling at +2 speed)
+        ; continue with "in/at platform" code, but keeps direction, sets new fall Y
+.isInOrAtPlatform:
+        ld      (ix+S_SPRITE_4B_ATTR.y),a
+        ; check if the ball is not under the screen, make it invisible then (+simpler AI)
+        rl      (ix+S_SPRITE_4B_ATTR.vpat)  ; throw away visibility flag
+        cp      192+32      ; Fc=1 if (Y < 192+32)
+        rr      (ix+S_SPRITE_4B_ATTR.vpat)  ; set new visibility from carry
+        ; if at platform, choose direction by platform extras
+        rr      c           ; extras bit 0 to carry
+        sbc     a,a         ; 0 = right, $FF = left
         ; HL = current X coordinate (9 bit)
         ld      l,(ix+S_SPRITE_4B_ATTR.x)
         ld      h,(ix+S_SPRITE_4B_ATTR.mrx8)
-        ; adjust it by some +- value deducted from B (32..1 index)
         ld      c,0         ; mirrorX flag = 0
-        ld      a,b
-        and     3           ; A = 0,1,2,3
-        sli     a           ; A = 1, 3, 5, 7
-        sub     4           ; A = -3, -1, +1, +3
+        sli     a           ; Right: A=+1 Fc=0 || Left: A=-1 Fc=1
         ; do: HL += signed(A) (the "add hl,a" is "unsigned", so extra jump+adjust needed)
         jr      nc,.moveRight
         dec     h
@@ -434,11 +520,11 @@ SnowballsAI:
         ld      a,(TotalFrames)
         xor     b
         and     7
-        jr      nz,.notEightFrameYet
+        jr      nz,.doNextSnowball
         ld      a,(ix+S_SPRITE_4B_ATTR.vpat)
         xor     1
         ld      (ix+S_SPRITE_4B_ATTR.vpat),a
-.notEightFrameYet:
+.doNextSnowball:
         add     ix,de       ; next snowball
         djnz    .loop       ; do all of them
         ret
@@ -546,6 +632,44 @@ SNOWBALLS_CNT   EQU     28
 SprSnowballs:   EQU     Sprites + 0*S_SPRITE_4B_ATTR    ; first snowball sprite at this address
 SprPlayer:      EQU     Sprites + SNOWBALLS_CNT*S_SPRITE_4B_ATTR    ; player sprite is here
 SprCollisionFx: EQU     SprPlayer + S_SPRITE_4B_ATTR
+
+    ;-------------------------------------------------------------------------------------
+    ; Part 7 - platforms collisions - data of platforms and their heights + extras
+
+        ALIGN   256                     ; align for simpler calculation of address
+PlatformsCollisionData:     ; the Y-coord of platforms are in sprite coordinates! (+32: 0..255)
+    ; extras:
+    ;   bit 0: 0=slope to right, 1=slope to left (to affect snowballs movement)
+    ;   bit 1: there's ladder near the platform
+    ; column 0 (sprite coordinates 16..31)
+        DB       75, 0, 127, 0, 185, 0, 222, 1, 255, 0, 255, 0, 255, 0, 255, 0
+    ; column 1 (sprite coordinates 32..47)
+        DB       75, 0, 128, 0, 186, 0, 222, 1, 255, 0, 255, 0, 255, 0, 255, 0
+    ; column 2 (sprite coordinates 48..)
+        DB       75, 0, 108, 1, 129, 0, 167, 1, 187, 0, 222, 1, 255, 0, 255, 0
+    ; column 3 (sprite coordinates 64..)
+        DB       75, 0, 107, 3, 130, 2, 166, 3, 188, 2, 222, 1, 255, 0, 255, 0
+    ; column 4 (sprite coordinates 80..)
+        DB       51, 1,  75, 0, 106, 1, 131, 0, 165, 1, 189, 0, 222, 1, 255, 0
+    ; column 5 (sprite coordinates 96..)
+        DB       51, 1,  75, 0, 105, 1, 132, 0, 164, 1, 190, 0, 222, 1, 255, 0
+    ; column 6 (sprite coordinates 112..)
+        DB       51, 3,  75, 2, 104, 1, 133, 0, 163, 1, 191, 0, 221, 1, 255, 0
+    ; column 7 (sprite coordinates 128..)
+        DB       51, 3,  75, 2, 103, 1, 134, 0, 162, 1, 192, 0, 220, 1, 255, 0
+    ; column 8 (sprite coordinates 144..)
+        DB       76, 0, 102, 1, 135, 0, 161, 1, 193, 0, 219, 1, 255, 0, 255, 0
+    ; column 9 (sprite coordinates 160..)
+        DB       77, 0, 101, 1, 136, 0, 160, 1, 194, 0, 218, 1, 255, 0, 255, 0
+    ; column 10 (sprite coordinates 176..)
+        DB       78, 2, 100, 3, 137, 2, 159, 3, 195, 2, 217, 3, 255, 0, 255, 0
+    ; column 11 (sprite coordinates 192..)
+        DB       79, 0,  99, 1, 138, 0, 158, 1, 196, 0, 216, 1, 255, 0, 255, 0
+    ; column 12 (sprite coordinates 208..)
+        DB       98, 1, 157, 1, 215, 1, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0
+    ; column 13 (sprite coordinates 224..)
+        DB       97, 1, 156, 1, 214, 1, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0
+PlatformsCollisionDataEnd:
 
     ;-------------------------------------------------------------------------------------
     ; reserve area for stack at $B800..$BFFF region
