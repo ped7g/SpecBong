@@ -35,6 +35,12 @@ mrx8    BYTE    0       ; PPPP Mx My Rt X8 (pal offset, mirrors, rotation, X8)
 vpat    BYTE    0       ; V 0 NNNNNN (visible, 5B type=off, pattern number 0..63)
     ENDS
 
+    STRUCT S_LADDER_DATA
+x       BYTE    0       ; centre of ladder -8 (left edge of player sprite when aligned)
+y       BYTE    0       ; position of top platform -16 (Ypos for player to stand at top)
+t       BYTE    0       ; y+t = bottom platform -16 (Ypos for player to stand at)
+    ENDS
+
 ; selecting "Next" as virtual device in assembler, which allows me to set up all banks
 ; of Next (0..223 8kiB pages = 1.75MiB of memory) and page-in virtual memory
 ; with SLOT/PAGE/MMU directives
@@ -164,11 +170,10 @@ InitBallsLoop:
         ld      (ix+S_SPRITE_4B_ATTR.y),206     ; near bottom of paper area
         ld      (ix+S_SPRITE_4B_ATTR.mrx8),0    ; clear pal offset, mirrors, rotate, x8
         ld      (ix+S_SPRITE_4B_ATTR.vpat),$80 + 2  ; pattern "2" (player
-        ;DEBUG position for testing the jump+fall mechanics
-        ld      (ix+S_SPRITE_4B_ATTR.x),32+100
-        ld      (ix+S_SPRITE_4B_ATTR.y),32
         ld      a,255
         ld      (Player1SafeLandingY),a
+        ld      hl,0
+        ld      (Player1LadderData),hl
 
     ; main loop of the game
 GameLoop:
@@ -457,20 +462,30 @@ Player1MoveByControls:
         ret
 
 .notInTableJump:
-        ; H = -16 + min(PlatformY[-3], PlatformY[+3]), C = extras of right platform, L = posX
+        ld      a,(Player1Controls)
+        ld      b,a         ; keep control bits around in B for controls checks
+        ; H = -16 + min(PlatformY[-3], PlatformY[+3]), C = extras of right platform, L = posX, B = controls
+
+    ;-------------------------------------------------------------------------------------
+    ; Part 9 - ladder mechanics - check if already hangs on ladder
+        ld      de,(Player1LadderData)  ; current ladder top+tall info (E=top,D=tall)
+        ld      a,d
+        or      a
+        jp      nz,.isGrabbingLadder
+
     ; if landing pattern, turn it into normal pattern
         ld      a,(ix+S_SPRITE_4B_ATTR.vpat)
         cp      $80+4
-        jr      nz,.notLandingSprite
-        ld      (ix+S_SPRITE_4B_ATTR.vpat),$80  ; reset sprite to 0
-.notLandingSprite:
-    ;TODO if ladder pattern, do the ladder AI
+        jr      c,.runningSprite
+    ; landing pattern (or unhandled unknown state :) )
+        ld      (ix+S_SPRITE_4B_ATTR.vpat),$80  ; reset sprite to 0 and continue with "running"
+.runningSprite:
     ; if regular pattern, do regular movement handling
         ; check if stands at platform +-1px (and align with platform)
         ld      a,(ix+S_SPRITE_4B_ATTR.y)
         sub     h
-        adc     a,0         ; turn -1/0/+1 into 0/+1
-        cp      2
+        inc     a                       ; -1/0/+1 -> 0/+1/+2
+        cp      3
         jr      c,.almostAtPlatform
         ; too much above platform, turn it into freefall (table jump)
         xor     a
@@ -484,14 +499,18 @@ Player1MoveByControls:
         ld      a,18
         add     a,h
         ld      (Player1SafeLandingY),a
-        ld      a,(Player1Controls)
-        ld      b,a         ; keep control bits around in B for simplicity
+        ; C = extras of right platform, L = posX, B = user controls
+
         bit     JOY_BIT_FIRE,b
         jr      z,.notJumpPressed
     ; start a new jump sequence
         ld      a,$80+3     ; jump pattern + visible
         ld      (ix+S_SPRITE_4B_ATTR.vpat),a
         xor     a
+        bit     JOY_BIT_UP,b    ; up/down prevents the side jump
+        jr      nz,.noRightJump
+        bit     JOY_BIT_DOWN,b
+        jr      nz,.noRightJump
         bit     JOY_BIT_LEFT,b
         jr      z,.noLeftJump
         dec     a
@@ -505,13 +524,106 @@ Player1MoveByControls:
         jp      .doTheTableJumpFall     ; and do the first tick of jump this frame already
 
 .notJumpPressed:
-/* TODO
-            if up/down is pressed {
-             near ladder +-Npx -> switch to ladder pattern, adjust Y -> end
-             else reset dir controls + continue (stands)
-            }
-*/
         ; C = extras of right platform, L = posX, B = user controls
+    ; check if up/down is pressed during regular running -> may enter ladder or stand
+        ld      a,b
+        and     (1<<JOY_BIT_UP)|(1<<JOY_BIT_DOWN)
+        jp      z,.noUpOrDownPressed
+    ;-------------------------------------------------------------------------------------
+    ; Part 9 - ladder mechanics - grab the near ladder if possible
+        bit     1,c                     ; check platform "extras" flag if ladder is near
+        ret     z                       ; no ladder near, just keep standing
+        ; check if some ladder can be grabbed by precise positions and controls pressed
+        ld      c,LaddersCount+1
+        ld      iy,LaddersData-S_LADDER_DATA
+.LadderCheckLoop:
+        dec     c
+        ret     z                       ; no ladded is aligned enough, keep standing
+        ld      de,S_LADDER_DATA
+        add     iy,de                   ; advance pointer into ladder data
+        ; check Y coordinates of ladder (top/bottom can be entered with correct key)
+        ld      e,(iy+S_LADDER_DATA.y)
+        ld      d,(iy+S_LADDER_DATA.t)
+        ld      a,e
+        cp      (ix+S_SPRITE_4B_ATTR.y)
+        jr      nz,.notAtTopOfLadder
+        ; if at top ladder position, check if control down is pressed and check X-coordinate
+        bit     JOY_BIT_DOWN,b
+        jr      z,.LadderCheckLoop      ; not pressing "down", ignore it
+        jr      .checkLadderXCoord
+.notAtTopOfLadder:
+        add     a,d
+        cp      (ix+S_SPRITE_4B_ATTR.y)
+        jr      nz,.LadderCheckLoop     ; not at bottom position of ladder, ignore it
+        bit     JOY_BIT_UP,b
+        jr      z,.LadderCheckLoop      ; not pressing "up", ignore it
+.checkLadderXCoord:
+        ld      h,(iy+S_LADDER_DATA.x)
+        ld      a,h
+        sub     l
+        add     a,2                     ; -2..+2 -> 0..+4
+        cp      5
+        jr      nc,.LadderCheckLoop     ; this ladder is more than +-2px away -> ignore it
+    ; grab the ladder
+        ld      l,h                     ; refresh also local copy of posX in L
+        ld      (ix+S_SPRITE_4B_ATTR.x),l   ; align with ladder on X-axis
+        ld      (Player1LadderData),de  ; current top+tall info
+    ; following is regular ladder AI, after it was grabbed previously
+.isGrabbingLadder:
+    ; modify posY by controls
+        ld      a,(TotalFrames)
+        and     1                       ; only 2 of 4 frames the inputs are read
+        ld      a,(ix+S_SPRITE_4B_ATTR.y)
+        jr      z,.notClimbing          ; but do the rest of ladder handler to set pattern/etc
+        bit     JOY_BIT_DOWN,b
+        jr      z,.notDescending
+        inc     a
+.notDescending:
+        bit     JOY_BIT_UP,b
+        jr      z,.notClimbing
+        dec     a
+.notClimbing:
+    ; sanitize the posY
+        sub     e
+        adc     a,0                     ; A=0..tall+1 where he is on the ladder (-1 fixed by ADC)
+        jr      z,.atTopOrBottom
+        dec     a
+        cp      d                       ; Fc=(A-1) - tall (will be "no-carry" only when posY==tall+1)
+        adc     a,0                     ; clamps A to 0..tall range only
+        cp      d
+        jr      z,.atTopOrBottom
+    ; somewhere in the middle of ladder, convert 1..tall-1 position into sprite pattern and posY
+        add     a,e
+        ld      (ix+S_SPRITE_4B_ATTR.y),a
+        sub     e
+        cp      LadderPatternDataSZ
+        jr      c,.getClimbPatternFromTable
+        ; beyond pre-defined table, so wrap around the last 8 patterns
+        and     LadderPatternWrapMask
+        add     a,LadderPatternWrapOfs
+.getClimbPatternFromTable:
+        ld      de,LadderPatternData
+        add     de,a
+        ld      a,(de)
+        ld      (ix+S_SPRITE_4B_ATTR.vpat),a
+        ret
+
+.atTopOrBottom:
+        add     a,e
+        ld      (ix+S_SPRITE_4B_ATTR.y),a
+        ld      (ix+S_SPRITE_4B_ATTR.vpat),$80+10   ; standing pattern
+        ld      a,b
+        and     (1<<JOY_BIT_LEFT)|(1<<JOY_BIT_RIGHT)
+        ret     z                       ; no left/right controls, stay on ladder standing
+    ; player wants to leave the ladder, clear the current ladder data
+        xor     a
+        ld      (Player1LadderData+1),a ; clear the "tall" value to zero
+        ; follow with regular running handler, that will resolve pattern/etc (L is up to date)
+        ; |
+        ; v
+
+.noUpOrDownPressed:
+        ; L = posX, B = user controls
         bit     JOY_BIT_LEFT,b
         jr      z,.notGoingLeft
     ; move left
@@ -713,6 +825,32 @@ Player1JumpDir:
         DB      0           ; -1/0/+1 depending if the jump has direction or not
 Player1SafeLandingY:
         DB      0           ; last known safe landing Y (will be +18 to current Y when *at* platform)
+Player1LadderData:
+        DB      0, 0        ; topY, tall (zero tall when not at ladder)
+
+    ;-------------------------------------------------------------------------------------
+    ; Part 9 - ladder mechanics - data of ladder positions and size
+
+    ; ladders (256x192 positions in BMP):
+    ; [152,163,185], [40,134,156], [152,105,127], [40,75,98], [152,46,68], [96, 19, 43]
+LaddersData:    ; adjustments: "32+" for sprite coordinates, "-8" and "-16" to adjust by player size
+        S_LADDER_DATA {32+152-8, 32+163-16, 185-163}
+        S_LADDER_DATA {32+40-8, 32+134-16, 156-134}
+        S_LADDER_DATA {32+152-8, 32+105-16, 127-105}
+        S_LADDER_DATA {32+40-8, 32+75-16, 98-75}
+        S_LADDER_DATA {32+152-8, 32+46-16, 68-46}
+        S_LADDER_DATA {32+96-8, 32+19-16, 43-19}
+LaddersCount:   EQU     ($-LaddersData)/S_LADDER_DATA
+
+LadderPatternData:
+            ; +0..+7 -> standing + climbing at top
+        DB  $80+10, $80+9, $80+9, $80+9, $80+9, $80+9, $80+9, $80+9
+        DB   $80+8, $80+8, $80+8, $80+8, $80+8, $80+8, $80+8, $80+8
+            ; +16..+23 -> regular climbing
+        DB   $80+6, $80+6, $80+6, $80+6, $80+7, $80+7, $80+7, $80+7
+LadderPatternDataSZ:    EQU     $ - LadderPatternData
+LadderPatternWrapMask:  EQU     7
+LadderPatternWrapOfs:   EQU     16
 
         ; reserve full 128 sprites 4B type (this demo will not use 5B type sprites)
         ALIGN   256                     ; aligned at 256B boundary w/o particular reason (yet)
