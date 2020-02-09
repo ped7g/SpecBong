@@ -164,6 +164,11 @@ InitBallsLoop:
         ld      (ix+S_SPRITE_4B_ATTR.y),206     ; near bottom of paper area
         ld      (ix+S_SPRITE_4B_ATTR.mrx8),0    ; clear pal offset, mirrors, rotate, x8
         ld      (ix+S_SPRITE_4B_ATTR.vpat),$80 + 2  ; pattern "2" (player
+        ;DEBUG position for testing the jump+fall mechanics
+        ld      (ix+S_SPRITE_4B_ATTR.x),32+100
+        ld      (ix+S_SPRITE_4B_ATTR.y),32
+        ld      a,255
+        ld      (Player1SafeLandingY),a
 
     ; main loop of the game
 GameLoop:
@@ -379,88 +384,175 @@ GetPlatformPosUnder:
     ;-------------------------------------------------------------------------------------
     ; "AI" subroutines
 
+    ;-------------------------------------------------------------------------------------
+    ; Part 8 - player controls: left+right and jump+fall mechanics
+
 Player1MoveByControls:
-    ; update "cooldown" of fire button to allow it only once per 10 frames
-        ld      a,(Player1FireCoolDown)
+    ; update "cooldown" of controls if there's some delay needed
+        ld      a,(Player1ControlsCoolDown)
         sub     1           ; SUB to update also carry flag
         adc     a,0         ; clamp the value to 0 to not go -1
-        ld      (Player1FireCoolDown),a
-    ; just DEBUG: up/down/left/right over whole screen, fire changing animation frame
+        ld      (Player1ControlsCoolDown),a
+        ret     nz          ; don't do anything with player during "cooldown"
         ld      ix,SprPlayer
+    ; calculate nearest platform at x-3 and x+3
+        ld      l,(ix+S_SPRITE_4B_ATTR.x)
+        ld      a,l
+        sub     3           ; not caring about edge cases, only works for expected X values
+        ld      (ix+S_SPRITE_4B_ATTR.x),a   ; posX-3
+        call    GetPlatformPosUnder
+        sub     16          ; player wants platform at +16 from player.Y
+        ld      h,a
+        ld      a,l
+        add     a,3
+        ld      (ix+S_SPRITE_4B_ATTR.x),a
+        call    GetPlatformPosUnder
+        sub     16          ; player wants platform at +16 from player.Y
+        ld      (ix+S_SPRITE_4B_ATTR.x),l   ; restore posX
+        cp      h
+        jr      nc,.keepHigherPlatform
+        ld      h,a
+.keepHigherPlatform:
+        ; H = -16 + min(PlatformY[-3], PlatformY[+3]), C = extras of right platform, L = posX
+        ld      a,(Player1JumpIdx)
+        or      a
+        jr      z,.notInTableJump
+.doTheTableJumpFall:
+    ; table jump/fall .. keep doing it until landing (no controls accepted)
+        ld      e,a
+        ld      d,high PlayerJumpYOfs   ; address of current DeltaY
+        cp      255
+        adc     a,0         ; increment it until it will reach 255, then keep 255
+        ld      (Player1JumpIdx),a
+    ; adjust posX by jump direction (3 of 4 frames)
+        ld      a,(TotalFrames)
+        and     3
+        jr      z,.skipJumpPosXupdate
+        ld      a,(Player1JumpDir)
+        call    .updateXPosAplusL
+.skipJumpPosXupdate:
+    ; adjust posY by jump/fall table
+        ld      a,(de)      ; deltaY for current jumpIdx
+        add     a,(ix+S_SPRITE_4B_ATTR.y)
+        cp      h           ; compare with platform Y
+        jr      z,.didLand
+        jr      nc,.didLand
+    ; still falling
+        ld      (ix+S_SPRITE_4B_ATTR.y),a
+        ret
+.didLand:
+        ld      (ix+S_SPRITE_4B_ATTR.y),h   ; land *at* platform precisely
+        xor     a
+        ld      (Player1JumpIdx),a      ; next frame do regular AI (no more jump table)
+        ld      (ix+S_SPRITE_4B_ATTR.vpat),$80+4    ; landing sprite
+        ld      a,4                     ; keep landing sprite for 4 frames
+        ld      (Player1ControlsCoolDown),a
+    ; check if landing was too hard
+        ld      a,(Player1SafeLandingY)
+        cp      h
+        ret     nc
+    ; lands too hard, "die" - just disable controls for 1s for now
+        ld      a,50
+        ld      (Player1ControlsCoolDown),a
+        ret
+
+.notInTableJump:
+        ; H = -16 + min(PlatformY[-3], PlatformY[+3]), C = extras of right platform, L = posX
+    ; if landing pattern, turn it into normal pattern
+        ld      a,(ix+S_SPRITE_4B_ATTR.vpat)
+        cp      $80+4
+        jr      nz,.notLandingSprite
+        ld      (ix+S_SPRITE_4B_ATTR.vpat),$80  ; reset sprite to 0
+.notLandingSprite:
+    ;TODO if ladder pattern, do the ladder AI
+    ; if regular pattern, do regular movement handling
+        ; check if stands at platform +-1px (and align with platform)
+        ld      a,(ix+S_SPRITE_4B_ATTR.y)
+        sub     h
+        adc     a,0         ; turn -1/0/+1 into 0/+1
+        cp      2
+        jr      c,.almostAtPlatform
+        ; too much above platform, turn it into freefall (table jump)
+        xor     a
+        ld      (Player1JumpDir),a
+        ld      a,low PlayerFallYOfs
+        jr      .doTheTableJumpFall     ; and do the first tick of fall this frame already
+
+.almostAtPlatform:
+        ld      (ix+S_SPRITE_4B_ATTR.y),h   ; place him precisely at platform
+        ; refresh safe landing Y
+        ld      a,18
+        add     a,h
+        ld      (Player1SafeLandingY),a
         ld      a,(Player1Controls)
         ld      b,a         ; keep control bits around in B for simplicity
-        ; HL = current X coordinate (9 bit)
-        ld      l,(ix+S_SPRITE_4B_ATTR.x)
-        ld      h,(ix+S_SPRITE_4B_ATTR.mrx8)
-        ld      c,h         ; preserve current mirrorX
+        bit     JOY_BIT_FIRE,b
+        jr      z,.notJumpPressed
+    ; start a new jump sequence
+        ld      a,$80+3     ; jump pattern + visible
+        ld      (ix+S_SPRITE_4B_ATTR.vpat),a
+        xor     a
+        bit     JOY_BIT_LEFT,b
+        jr      z,.noLeftJump
+        dec     a
+.noLeftJump:
         bit     JOY_BIT_RIGHT,b
-        jr      z,.notGoingRight
-        inc     hl
-        inc     hl          ; X += 2
-        res     3,c         ; mirrorX=0 (face right)
-.notGoingRight:
+        jr      z,.noRightJump
+        inc     a
+.noRightJump:
+        ld      (Player1JumpDir),a
+        ld      a,low PlayerJumpYOfs
+        jp      .doTheTableJumpFall     ; and do the first tick of jump this frame already
+
+.notJumpPressed:
+/* TODO
+            if up/down is pressed {
+             near ladder +-Npx -> switch to ladder pattern, adjust Y -> end
+             else reset dir controls + continue (stands)
+            }
+*/
+        ; C = extras of right platform, L = posX, B = user controls
         bit     JOY_BIT_LEFT,b
         jr      z,.notGoingLeft
-        dec     hl
-        dec     hl          ; X -= 2
-        set     3,c         ; mirrorX=1 (face left)
+    ; move left
+        set     3,(ix+S_SPRITE_4B_ATTR.mrx8)    ; set MirroX flag (to face left)
+        ld      a,(TotalFrames)
+        and     3
+        jr      z,.animateRunPattern    ; one frame out of 4 don't move but animate (0.75px speed)
+        ld      a,-1
+        jr      .updateXPosAplusL
+
 .notGoingLeft:
-        ; sanitize HL to values range 32..272 (16px sprite fully visible in PAPER area)
-        ld      de,32
-        ; first clear top bits of H to keep only "x8" bit of it (remove mirrors/rot/pal data)
-        rr      h           ; Fcarry = x8
-        ld      h,0
-        rl      h           ; x8 back to H, Fcarry=0 (for sbc)
-        sbc     hl,de
-        add     hl,de       ; Fc=1 when HL is 0..31
-        jr      nc,.XposIs32plus
-        ex      de,hl       ; for 0..31 reset the Xpos=HL=32
-.XposIs32plus:              ; (there was "272" constant in previous part => bug, now fixed)
-        ld      de,32+256-16+1  ; 273 - first position when sprite has one px in border
-        or      a           ; Fc=0
-        sbc     hl,de
-        add     hl,de       ; Fc=1 when HL is 32..272
-        jr      c,.XposIsValid
-        ex      de,hl
-        dec     hl          ; for 273+ reset the Xpos=HL=272
-.XposIsValid:
-        ; store the sanitized X post and new mirrorX to player sprite values
-        ld      a,c
-        and     ~1          ; clear x8 bit (preserves only mirror/rotate/...)
-        or      h           ; merge x8 back
-        ld      (ix+S_SPRITE_4B_ATTR.x),l
-        ld      (ix+S_SPRITE_4B_ATTR.mrx8),a
-        ; vertical movement
-        ld      a,(ix+S_SPRITE_4B_ATTR.y)
-        bit     JOY_BIT_UP,b
-        jr      z,.notGoingUp
-        dec     a
-        dec     a           ; Y -= 2
-        cp      32          ; sanitize right here
-        jr      nc,.notGoingUp
-        ld      a,32        ; 0..31 -> Y=32
-.notGoingUp:
-        bit     JOY_BIT_DOWN,b
-        jr      z,.notGoingDown
-        inc     a
-        inc     a           ; Y += 2
-        cp      32+192-16+1 ; sanitize right here (209+ is outside of PAPER area)
-        jr      c,.notGoingDown
-        ld      a,32+192-16 ; 209..255 -> Y=208 (was 207 in previous part = bug)
-.notGoingDown:
-        ld      (ix+S_SPRITE_4B_ATTR.y),a
-        ; change through all 64 sprite patterns when pressing fire
-        bit     JOY_BIT_FIRE,b
-        ret     z           ; Player1 movement done - no fire button
-        ld      a,(Player1FireCoolDown)
-        or      a
-        ret     nz          ; check "cooldown" of fire, ignore button if still cooling down
-        ld      a,10
-        ld      (Player1FireCoolDown),a     ; set new "cooldown" if pattern will change
+        bit     JOY_BIT_RIGHT,b
+        jr      z,.notGoingRight
+    ; move right
+        res     3,(ix+S_SPRITE_4B_ATTR.mrx8)    ; reset MirroX flag (to face right)
+        ld      a,(TotalFrames)
+        and     3
+        jr      z,.animateRunPattern    ; one frame out of 4 don't move but animate (0.75px speed)
+        ld      a,+1
+        jr      .updateXPosAplusL
+
+.animateRunPattern:
+    ; animate pattern 0..3 frames (in case he holds left or right) (if not, it will be zeroed)
         ld      a,(ix+S_SPRITE_4B_ATTR.vpat)
         inc     a
-        and     ~64         ; force the pattern to stay 0..63 and keep +128 for "visible"
+        and     %1'0'000011     ; force pattern to stay 0..3 (+visible flag)
         ld      (ix+S_SPRITE_4B_ATTR.vpat),a
+        ret
+
+.notGoingRight:
+    ; not going anywhere
+        ld      (ix+S_SPRITE_4B_ATTR.vpat),$80  ; reset to frame 0
+        ret
+
+.updateXPosAplusL:
+        add     a,l             ; add A and L to get final posX
+        cp      32
+        ret     c               ; way too left, don't update
+        cp      32+192-16+1
+        ret     nc              ; way too right, don't update
+        ld      (ix+S_SPRITE_4B_ATTR.x),a   ; valid X: 32..32+192-16
         ret
 
 SnowballsAI:
@@ -613,8 +705,14 @@ CollisionFxCount:           ; count the dynamically created extra FX sprites dis
     ; bits encoding inputs as Kempston/MD: https://wiki.specnext.dev/Kempston_Joystick
 Player1Controls:
         DB      0
-Player1FireCoolDown:
+Player1ControlsCoolDown:
         DB      0
+Player1JumpIdx:             ; when non-zero, player is jumping (and it is index to PlayerJumpYOfs table)
+        DB      0
+Player1JumpDir:
+        DB      0           ; -1/0/+1 depending if the jump has direction or not
+Player1SafeLandingY:
+        DB      0           ; last known safe landing Y (will be +18 to current Y when *at* platform)
 
         ; reserve full 128 sprites 4B type (this demo will not use 5B type sprites)
         ALIGN   256                     ; aligned at 256B boundary w/o particular reason (yet)
@@ -670,6 +768,17 @@ PlatformsCollisionData:     ; the Y-coord of platforms are in sprite coordinates
     ; column 13 (sprite coordinates 224..)
         DB       97, 1, 156, 1, 214, 1, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0
 PlatformsCollisionDataEnd:
+
+    ; this is 32B table which should precisely fit at the end of 256B page
+    ; i.e. at $xxE0..$xxFF addresses - it will be used by the code to stay at last item
+PlayerJumpYOfs:
+        DB      -2, -2, -2, -1, -1, -1, -1, -1
+        DB      -1, -1, -1,  0, -1,  0, -1,  0
+        DB       0,  0,  0,  1,  0,  1,  0,  1
+        DB       1,  1,  1,  1
+PlayerFallYOfs:                                 ; first item of free-fall w/o jump
+        DB                       1,  1,  1,  2  ; last item to be used repeatedly
+        ASSERT  low $ == 0      ; did reach end of aligned 256B block?
 
     ;-------------------------------------------------------------------------------------
     ; reserve area for stack at $B800..$BFFF region
