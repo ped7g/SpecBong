@@ -203,8 +203,6 @@ GameLoop:
     ; adjust sprite attributes in memory pointlessly (in debug way) just to see some movement
         call    SnowballsAI
 
-    ;-------------------------------------------------------------------------------------
-    ; Part 5 - adding controls to main character - just DEBUG free move around full PAPER
         IFDEF DISPLAY_PERFORMANCE_DEBUG_BORDER
             ; green border: to measure the player AI code performance
             ld      a,4
@@ -212,6 +210,11 @@ GameLoop:
         ENDIF
         call    ReadInputDevices
         call    Player1MoveByControls
+        IFDEF DISPLAY_PERFORMANCE_DEBUG_BORDER
+            ; cyan border: to measure the collisions code performance
+            ld      a,5
+            out     (ULA_P_FE),a
+        ENDIF
         call    SnowballvsPlayerCollision
 
     IF 0    ; DEBUG wait for fire key after frame
@@ -223,17 +226,9 @@ GameLoop:
         jr      GameLoop
 
     ;-------------------------------------------------------------------------------------
-    ; Part 6 - writing + testing the collision detection player vs snowball (only player vs balls)
-    ; because only player vs balls is checked, there's no smart optimization like "buckets"
-    ; sorting first sprites into groups which may interact, etc... just simple O(N) loop
-    ; checking every ball against player position
-    ; (BTW I did use +-1px player movement to debug the collision code, if you are wondering)
+    ; the collision detection player vs snowball (only player vs balls)
+
 SnowballvsPlayerCollision:
-        IFDEF DISPLAY_PERFORMANCE_DEBUG_BORDER
-            ; green border: to measure the collisions code performance
-            ld      a,5
-            out     (ULA_P_FE),a
-        ENDIF
         ; read player position into registers
         ld      ix,SprPlayer
         ld      l,(ix+S_SPRITE_4B_ATTR.x)
@@ -333,7 +328,7 @@ SnowballvsPlayerCollision:
         ret
 
     ;-------------------------------------------------------------------------------------
-    ; Part 7 - platforms collisions
+    ; platforms collisions
     ; These don't check the image pixels, but instead there are few columns accross
     ; the screen, and for each column there can be 8 platforms defined. These data are
     ; hand-tuned for the background image. Each column is 16px wide, so there are 16 columns
@@ -387,10 +382,7 @@ GetPlatformPosUnder:
         ret                 ; return directly to caller with results in A and C
 
     ;-------------------------------------------------------------------------------------
-    ; "AI" subroutines
-
-    ;-------------------------------------------------------------------------------------
-    ; Part 8 - player controls: left+right and jump+fall mechanics
+    ; "AI" subroutines - player movements
 
 Player1MoveByControls:
     ; update "cooldown" of controls if there's some delay needed
@@ -466,8 +458,7 @@ Player1MoveByControls:
         ld      b,a         ; keep control bits around in B for controls checks
         ; H = -16 + min(PlatformY[-3], PlatformY[+3]), C = extras of right platform, L = posX, B = controls
 
-    ;-------------------------------------------------------------------------------------
-    ; Part 9 - ladder mechanics - check if already hangs on ladder
+    ; check if already hangs on ladder
         ld      de,(Player1LadderData)  ; current ladder top+tall info (E=top,D=tall)
         ld      a,d
         or      a
@@ -529,8 +520,7 @@ Player1MoveByControls:
         ld      a,b
         and     (1<<JOY_BIT_UP)|(1<<JOY_BIT_DOWN)
         jp      z,.noUpOrDownPressed
-    ;-------------------------------------------------------------------------------------
-    ; Part 9 - ladder mechanics - grab the near ladder if possible
+    ; ladder mechanics - grab the near ladder if possible
         bit     1,c                     ; check platform "extras" flag if ladder is near
         ret     z                       ; no ladder near, just keep standing
         ; check if some ladder can be grabbed by precise positions and controls pressed
@@ -666,6 +656,9 @@ Player1MoveByControls:
         ret     nc              ; way too right, don't update
         ld      (ix+S_SPRITE_4B_ATTR.x),a   ; valid X: 32..32+192-16
         ret
+
+    ;-------------------------------------------------------------------------------------
+    ; "AI" subroutines - snowballs "AI"
 
 SnowballsAI:
         ld      ix,SprSnowballs
@@ -828,9 +821,6 @@ Player1SafeLandingY:
 Player1LadderData:
         DB      0, 0        ; topY, tall (zero tall when not at ladder)
 
-    ;-------------------------------------------------------------------------------------
-    ; Part 9 - ladder mechanics - data of ladder positions and size
-
     ; ladders (256x192 positions in BMP):
     ; [152,163,185], [40,134,156], [152,105,127], [40,75,98], [152,46,68], [96, 19, 43]
 LaddersData:    ; adjustments: "32+" for sprite coordinates, "-8" and "-16" to adjust by player size
@@ -842,7 +832,7 @@ LaddersData:    ; adjustments: "32+" for sprite coordinates, "-8" and "-16" to a
         S_LADDER_DATA {32+96-8, 32+19-16, 43-19}
 LaddersCount:   EQU     ($-LaddersData)/S_LADDER_DATA
 
-LadderPatternData:
+LadderPatternData:          ; Player's sprite patterns for different stage of climbing
             ; +0..+7 -> standing + climbing at top
         DB  $80+10, $80+9, $80+9, $80+9, $80+9, $80+9, $80+9, $80+9
         DB   $80+8, $80+8, $80+8, $80+8, $80+8, $80+8, $80+8, $80+8
@@ -869,8 +859,7 @@ SprSnowballs:   EQU     Sprites + 0*S_SPRITE_4B_ATTR    ; first snowball sprite 
 SprPlayer:      EQU     Sprites + SNOWBALLS_CNT*S_SPRITE_4B_ATTR    ; player sprite is here
 SprCollisionFx: EQU     SprPlayer + S_SPRITE_4B_ATTR
 
-    ;-------------------------------------------------------------------------------------
-    ; Part 7 - platforms collisions - data of platforms and their heights + extras
+    ; platforms collisions - data of platforms and their heights + extras
 
         ALIGN   256                     ; align for simpler calculation of address
 PlatformsCollisionData:     ; the Y-coord of platforms are in sprite coordinates! (+32: 0..255)
