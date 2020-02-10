@@ -12,6 +12,13 @@
 ; (the upside down uncompressed 8bpp TGA has the advantage that it can be just binary
 ; included as L2 pixel data, from correct offset, no need of any further conversion)
 
+; TODO plan to final release:
+; - upon jump "drop" invisible sprite "egg" to calculate collisions against balls
+; - track the hits of "egg" (only once per ball) and score it: first +100, next: 3x (300, 900, 2700, ...)
+; - display "egg" bonus to player with delayed decay (needs probably two of these, but only single "egg" itself)
+; - add logic: total score, total lives, bonus-timer
+; - reset level, end of level, death of player, game over
+
 ; adjusting sjasmplus syntax to my taste (a bit more strict than default) + enable Z80N
     OPT --syntax=abfw --zxnext
 
@@ -58,14 +65,40 @@ start:
 
     ; disable interrupts, we will avoid using them to keep code simpler to understand
         di
+    ; setup bottom part of random seed by R
+        ld      a,r
+        ld      (Rand16.s),a
+        nextreg TURBO_CONTROL_NR_07,0       ; DEBUG - switch to 3.5MHz for fun
+            ; also to show how powerful the new HW features are, or in other way,
+            ; how little you can do in 3.5MHz and how optimized the classic games
+            ; must be to achieve anything more complex
+
     ; make the Layer 2 visible and reset some registers (should be reset by NEXLOAD, but to be safe)
         nextreg DISPLAY_CONTROL_NR_69,$80   ; Layer 2 visible, ULA bank 5, Timex mode 0
-        nextreg SPRITE_CONTROL_NR_15,$01    ; LoRes off, layer priority SLU, sprites visible
+        nextreg SPRITE_CONTROL_NR_15,%000'100'01 ; LoRes off, layer priority USL, sprites visible
         nextreg LAYER2_RAM_BANK_NR_12,9     ; visible Layer 2 starts at bank 9
         nextreg LAYER2_CONTROL_NR_70,0      ; 256x192x8 Layer 2 mode, L2 palette offset +0
         nextreg LAYER2_XOFFSET_NR_16,0      ; Layer 2 X,Y offset = [0,0]
         nextreg LAYER2_XOFFSET_MSB_NR_71,0  ; including the new NextReg 0x71 for cores 3.0.6+
         nextreg LAYER2_YOFFSET_NR_17,0
+
+    ; set all three clip windows (Sprites, Layer2, ULA) explicitly just to be sure
+        ; helps with bug in CSpect which draws sprites "over-border" even when it is OFF
+        nextreg CLIP_WINDOW_CONTROL_NR_1C,$03   ; reset write index to all three clip windows
+        nextreg CLIP_LAYER2_NR_18,0
+        nextreg CLIP_LAYER2_NR_18,255
+        nextreg CLIP_LAYER2_NR_18,0
+        nextreg CLIP_LAYER2_NR_18,191
+        nextreg CLIP_SPRITE_NR_19,0
+        nextreg CLIP_SPRITE_NR_19,255
+        nextreg CLIP_SPRITE_NR_19,0
+        nextreg CLIP_SPRITE_NR_19,191
+        nextreg CLIP_ULA_LORES_NR_1A,0
+        nextreg CLIP_ULA_LORES_NR_1A,255
+        nextreg CLIP_ULA_LORES_NR_1A,0
+        nextreg CLIP_ULA_LORES_NR_1A,191
+
+        call    InitUi      ; will setup everything important about ULA screen, CLS + labels, etc.
 
     ; setup Layer 2 palette - map palette data to $E000 region, to process them
         nextreg MMU7_E000_NR_57,$$BackGroundPalette ; map the memory with palette
@@ -131,6 +164,10 @@ UploadSpritePatternsLoop:
         dec     a
         jr      nz,UploadSpritePatternsLoop ; do 64 patterns
 
+    ; setup high part of random seed by R
+        ld      a,r
+        ld      (Rand16.s+1),a
+
     ; init SNOWBALLS_CNT snowballs and one player - the in-memory copy of sprite attributes
         ; init them at some debug positions, they just fly around mindlessly
         ld      ix,SprSnowballs         ; IX = address of first snowball sprite
@@ -164,16 +201,8 @@ InitBallsLoop:
         ld      (ix+S_SPRITE_4B_ATTR.mrx8),0
         ld      (ix+S_SPRITE_4B_ATTR.vpat),d
 
-        ; init player at debug position
-        ld      ix,SprPlayer
-        ld      (ix+S_SPRITE_4B_ATTR.x),32+16   ; near left of paper area
-        ld      (ix+S_SPRITE_4B_ATTR.y),206     ; near bottom of paper area
-        ld      (ix+S_SPRITE_4B_ATTR.mrx8),0    ; clear pal offset, mirrors, rotate, x8
-        ld      (ix+S_SPRITE_4B_ATTR.vpat),$80 + 2  ; pattern "2" (player
-        ld      a,255
-        ld      (Player1SafeLandingY),a
-        ld      hl,0
-        ld      (Player1LadderData),hl
+        ; init game state for new game
+        call    GameStateInit_NewGame
 
     ; main loop of the game
 GameLoop:
@@ -196,6 +225,12 @@ GameLoop:
         otir
         otir
         IFDEF DISPLAY_PERFORMANCE_DEBUG_BORDER
+            ; yellow border: to measure the UI code performance
+            ld      a,6
+            out     (ULA_P_FE),a
+        ENDIF
+        call    RefreshUi   ; draws score, lives, jump-over-ball bonus scores, etc
+        IFDEF DISPLAY_PERFORMANCE_DEBUG_BORDER
             ; magenda border: to measure the AI code performance
             ld      a,3
             out     (ULA_P_FE),a
@@ -217,6 +252,11 @@ GameLoop:
         ENDIF
         call    SnowballvsPlayerCollision
 
+    ; DEBUG add some random value to score to verify it works (every 63 frames)
+        ld      a,(TotalFrames)
+        and     $3F
+        call    z,DebugRandomScoreAdd
+
     IF 0    ; DEBUG wait for fire key after frame
 .waitForFire:       call ReadInputDevices : ld a,(Player1Controls) : bit JOY_BIT_FIRE,a : jr z,.waitForFire
 .waitForRelease:    call ReadInputDevices : ld a,(Player1Controls) : bit JOY_BIT_FIRE,a : jr nz,.waitForRelease
@@ -224,6 +264,225 @@ GameLoop:
 
     ; do the GameLoop infinitely
         jr      GameLoop
+
+DebugRandomScoreAdd:    ; DEBUG
+        call    Rand16
+        ld      a,l
+        xor     h       ; 0..255 to add to score (score is displayed as *100, so it's +0..+25,500)
+        call    AddScore
+        call    DecreaseBonus
+        ret
+
+    ;-------------------------------------------------------------------------------------
+    ; Part 10 - UI drawing routines - using transparent ULA layer above everything
+
+GameStateInit_NewGame:
+    ; reset score to zero
+        ld      hl,Player1Score
+        ld      de,Player1Score+1
+        ld      (hl),'0'
+        ld      bc,7
+        ldir
+    ; reset lives
+        ld      a,3
+        ld      (Player1Lives),a
+        ; |
+        ; fallthrough to GameStateInit_NewLevel
+        ; |
+        ; v
+GameStateInit_NewLevel:
+    ; currently there's nothing special about new level
+        ; |
+        ; fallthrough to GameStateInit_NewLife
+        ; |
+        ; v
+GameStateInit_NewLife:
+    ; reset bonus counter to 5000 (the last two are always zeroes, no need to re-init)
+        ld      hl,"05"     ; L = '5', H = '0' vs little-endian way of storing 16bit value
+        ld      (LevelBonus),hl
+    ; reset Player position, and movement internals like ladder/jumping stuff
+        ld      ix,SprPlayer
+        ld      (ix+S_SPRITE_4B_ATTR.x),32+16   ; near left of paper area
+        ld      (ix+S_SPRITE_4B_ATTR.y),206     ; near bottom of paper area
+        ld      (ix+S_SPRITE_4B_ATTR.mrx8),0    ; clear pal offset, mirrors, rotate, x8
+        ld      (ix+S_SPRITE_4B_ATTR.vpat),$80 + 0  ; start with pattern 0
+        xor     a
+        ld      (Player1Controls),a
+        ld      (Player1ControlsCoolDown),a
+        ld      (Player1LadderData+1),a         ; just "tall" to zero is enough
+        ld      (Player1JumpIdx),a
+        ld      (Player1JumpDir),a
+        dec     a       ; A = 255
+        ld      (Player1SafeLandingY),a
+    ;TODO snowball AI reset + sprites reset
+        ret
+
+InitUi:
+    ; set ULA palette (to have background transparent) and do classic "CLS"
+        nextreg PALETTE_CONTROL_NR_43,%0'000'0'0'0'0    ; Classic ULA + custom palette
+        nextreg PALETTE_INDEX_NR_40,16+7    ; paper 7
+        nextreg PALETTE_VALUE_NR_41,$E3
+        nextreg PALETTE_INDEX_NR_40,16+8+7  ; paper 7 + bright 1
+        nextreg PALETTE_VALUE_NR_41,$E3
+        nextreg GLOBAL_TRANSPARENCY_NR_14,$E3
+        nextreg TRANSPARENCY_FALLBACK_COL_NR_4A,%000'111'11 ; bright cyan as debug (shouldn't be seen)
+    ; do the "CLS"
+        ld      hl,MEM_ZX_SCREEN_4000
+        ld      de,MEM_ZX_SCREEN_4000+1
+        ld      bc,MEM_ZX_ATTRIB_5800-MEM_ZX_SCREEN_4000
+        ld      (hl),l
+        ldir
+        ld      (hl),P_WHITE|BLACK          ; set all attributes to white paper + black ink
+        ld      bc,32*24-1
+        ldir
+    ; set attributes of some areas of screeen
+        ; "score" label attr
+        ld      hl,MEM_ZX_ATTRIB_5800 + 0*32 + 24
+        ld      (hl),P_WHITE|WHITE|A_BRIGHT
+        ld      c,8
+        call    .FillAttribs
+        ; score value attr
+        ld      hl,MEM_ZX_ATTRIB_5800 + 1*32 + 24
+        ld      (hl),P_WHITE|YELLOW|A_BRIGHT
+        ld      c,8
+        call    .FillAttribs
+        ; "bonus" label attr
+        ld      hl,MEM_ZX_ATTRIB_5800 + 2*32 + 24
+        ld      (hl),P_WHITE|WHITE|A_BRIGHT
+        ld      c,8
+        call    .FillAttribs
+        ; bonus value attr
+        ld      hl,MEM_ZX_ATTRIB_5800 + 3*32 + 24
+        ld      (hl),P_WHITE|CYAN|A_BRIGHT
+        ld      c,8
+        call    .FillAttribs
+        ; "lives" label attr
+        ld      hl,MEM_ZX_ATTRIB_5800 + 4*32 + 24
+        ld      (hl),P_WHITE|WHITE|A_BRIGHT
+        ld      c,8
+        call    .FillAttribs
+    ; print the static labels
+        ld      de,MEM_ZX_SCREEN_4000 + 0*32 + 24
+        ld      hl,ScoreLabelTxt
+        ld      b,8
+        call    PrintStringHlAtDe
+        ld      de,MEM_ZX_SCREEN_4000 + 1*32 + 24
+        ld      hl,Player1Score
+        ld      b,8
+        call    PrintStringHlAtDe
+        ld      de,MEM_ZX_SCREEN_4000 + 2*32 + 24
+        ld      hl,BonusLabelTxt
+        ld      b,8
+        call    PrintStringHlAtDe
+        ld      de,MEM_ZX_SCREEN_4000 + 3*32 + 28
+        ld      hl,LevelBonus
+        ld      b,4
+        call    PrintStringHlAtDe
+        ld      de,MEM_ZX_SCREEN_4000 + 4*32 + 24
+        ld      hl,LivesLabelTxt
+        ld      b,8
+        call    PrintStringHlAtDe
+        ret
+.FillAttribs:
+        ld      d,h
+        ld      e,l
+        inc     de
+        dec     bc
+        ldir
+        ret
+
+RefreshUi:
+    ; refresh the score
+        ld      de,MEM_ZX_SCREEN_4000 + 1*32 + 24
+        ld      hl,Player1Score
+        ld      b,8
+        call    PrintStringHlAtDe
+    ; refresh the bonus score
+        ld      de,MEM_ZX_SCREEN_4000 + 3*32 + 28
+        ld      hl,LevelBonus
+        ld      b,4
+        call    PrintStringHlAtDe
+    ; refresh the lives UI (it's shown with sprites :) )
+        ld      ix,SprLivesUi
+        ld      b,0
+        ld      a,(Player1Lives)
+        ld      c,a                 ; amount of lives to show (others to hide)
+        ld      hl,32+24*8+2
+.livesUiSetSpriteLoop:
+        ld      (ix+S_SPRITE_4B_ATTR.mrx8),h    ; no mirror/rotate flags
+        ld      (ix+S_SPRITE_4B_ATTR.x),l
+        ld      (ix+S_SPRITE_4B_ATTR.y),32+5*8+1
+        ld      e,32*2              ; will become pattern number 32
+        ld      a,b
+        cp      c
+        rr      e                   ; index < lives -> top bit (visible/hidden flag)
+        ld      (ix+S_SPRITE_4B_ATTR.vpat),e
+        ld      de,S_SPRITE_4B_ATTR
+        add     ix,de
+        add     hl,10
+        inc     b
+        cp      5                   ; show at most 6 lives sprites
+        jr      c,.livesUiSetSpriteLoop
+        ret
+
+AddScore:
+    ; In: A = score to add (0..255, score is automatically *100)
+        ld      bc,(100<<8) | $FF   ; B = 100, C = -1
+        call    .extractDigit
+        push    bc
+        ld      bc,(10<<8) | $FF    ; B = 10, C = -1
+        call    .extractDigit
+        ; C = tens, A = ones (C on stack = hundreds)
+    ; add the digits to the string in memory representing score
+        ld      hl,Player1Score+5   ; start at third digit from right ("00" is fixed)
+        call    .addDigit
+        ld      a,c
+        pop     bc
+        ld      b,5
+.updateDigitsLoop:
+        dec     hl
+        call    .addDigit
+        ld      a,c
+        ld      c,0
+        djnz    .updateDigitsLoop
+        ret
+.addDigit:
+    ; A = current digit amount 0..10, C = next digit amount 0..9 (!)
+        add     a,(hl)
+        cp      '0'+10
+        ld      (hl),a              ; digit updated, check if carry has to happen
+        ret     c                   ; '0'..'9' = ok, done
+        sub     10                  ; beyond '9' -> fix char and increment next digit
+        ld      (hl),a
+        inc     c
+        ret
+.extractDigit:
+        inc     c
+        sub     b
+        jr      nc,.extractDigit
+        add     a,b
+        ret
+
+DecreaseBonus:
+    ; decrement hundreds digit
+        ld      hl,(LevelBonus)     ; L = first digit char, H = second digit char
+        dec     h
+        ld      a,'0'-1
+        cp      h
+        jr      c,.writeNewValue
+    ; hundreds digit was '0' before, wrap around or refuse to decrement when " 000"
+        dec     l
+        cp      l
+        ret     nc                  ; value was already " 000", can decrement more, ignore
+        inc     a
+        cp      l
+        jr      nz,.keepFirstDigit
+        ld      l,' '               ; exchange first '0' with space
+.keepFirstDigit:
+        ld      h,'9'               ; L is still valid 0..9, fix the hundreds digit to "9"
+.writeNewValue:
+        ld      (LevelBonus),hl
+        ret
 
     ;-------------------------------------------------------------------------------------
     ; the collision detection player vs snowball (only player vs balls)
@@ -729,6 +988,22 @@ SnowballsAI:
     ;-------------------------------------------------------------------------------------
     ; utility subroutines
 
+PrintStringHlAtDe:
+    ; In: HL = string address, DE = ULA VRAM address, B = length of string
+    ; modifies: HL,DE,B
+        push    hl
+        ld      l,(hl)
+        ; do HL = MEM_ROM_CHARS_3C00 + char_value*8
+        add     hl,hl       ; regular ASCII should fit into L only
+        ld      h,(high MEM_ROM_CHARS_3C00)/4
+        .2 add hl,hl        ; remaining 4x to get final address of font data
+        .8 ldws             ; 8x copy font data to ULA VRAM
+        add     de,1-$800   ; adjust DE to beginning of next char
+        pop     hl          ; HL to string pointer and advance
+        inc     hl
+        djnz    PrintStringHlAtDe
+        ret
+
 ReadInputDevices:
         ; read Kempston port first, will also clear the inputs
         in      a,(KEMPSTON_JOY1_P_1F)
@@ -799,6 +1074,28 @@ WaitForScanlineUnderUla:
     ; I don't need to read MSB. 256+192 = 448 -> such scanline is not part of any mode.
         ret
 
+; From http://map.grauw.nl/sources/external/z80bits.html#4.2 (Milos "baze" Bazelides Z80 bits)
+Rand16:
+    ; Out: HL = pseudo-random number, period 65536
+    ; modifies: A, DE
+.s=$+1  ld      de,0        ; seed
+        ld      a,d
+        ld      h,e
+        ld      l,253
+        or      a
+        sbc     hl,de
+        sbc     a,0
+        sbc     hl,de
+        ld      d,0
+        sbc     a,d
+        ld      e,a
+        sbc     hl,de
+        jr      nc,.storeSeed
+        inc     hl
+.storeSeed:
+        ld      (.s),hl
+        ret
+
     ;-------------------------------------------------------------------------------------
     ; data area
 
@@ -806,6 +1103,8 @@ TotalFrames:                ; count frames for purposes of slower animations/etc
         DD      0
 CollisionFxCount:           ; count the dynamically created extra FX sprites displaying collision
         DB      0
+LevelBonus:
+        DB      "xx00"
 
     ; bits encoding inputs as Kempston/MD: https://wiki.specnext.dev/Kempston_Joystick
 Player1Controls:
@@ -820,6 +1119,18 @@ Player1SafeLandingY:
         DB      0           ; last known safe landing Y (will be +18 to current Y when *at* platform)
 Player1LadderData:
         DB      0, 0        ; topY, tall (zero tall when not at ladder)
+
+Player1Score:               ; max score 99,999,900 (8 characters in ULA mode, last two "00" always :))
+        DS      8, 'x'
+Player1Lives:
+        DB      0
+
+ScoreLabelTxt:
+        DB      " SCORE: "
+BonusLabelTxt:
+        DB      " BONUS: "
+LivesLabelTxt:
+        DB      " LIVES: "
 
     ; ladders (256x192 positions in BMP):
     ; [152,163,185], [40,134,156], [152,105,127], [40,75,98], [152,46,68], [96, 19, 43]
@@ -858,6 +1169,7 @@ SNOWBALLS_CNT   EQU     28
 SprSnowballs:   EQU     Sprites + 0*S_SPRITE_4B_ATTR    ; first snowball sprite at this address
 SprPlayer:      EQU     Sprites + SNOWBALLS_CNT*S_SPRITE_4B_ATTR    ; player sprite is here
 SprCollisionFx: EQU     SprPlayer + S_SPRITE_4B_ATTR
+SprLivesUi:     EQU     SprCollisionFx + SNOWBALLS_CNT * S_SPRITE_4B_ATTR
 
     ; platforms collisions - data of platforms and their heights + extras
 
