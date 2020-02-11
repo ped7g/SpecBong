@@ -68,10 +68,8 @@ start:
     ; setup bottom part of random seed by R
         ld      a,r
         ld      (Rand16.s),a
-        nextreg TURBO_CONTROL_NR_07,0       ; DEBUG - switch to 3.5MHz for fun
-            ; also to show how powerful the new HW features are, or in other way,
-            ; how little you can do in 3.5MHz and how optimized the classic games
-            ; must be to achieve anything more complex
+        nextreg TURBO_CONTROL_NR_07,2       ; switch to 14MHz as final speed (it's more than enough)
+            ; but makes it somewhat easier on the emulator than max 28MHz mode
 
     ; make the Layer 2 visible and reset some registers (should be reset by NEXLOAD, but to be safe)
         nextreg DISPLAY_CONTROL_NR_69,$80   ; Layer 2 visible, ULA bank 5, Timex mode 0
@@ -171,7 +169,7 @@ UploadSpritePatternsLoop:
     ; init SNOWBALLS_CNT snowballs and one player - the in-memory copy of sprite attributes
         ; init them at some debug positions, they just fly around mindlessly
         ld      ix,SprSnowballs         ; IX = address of first snowball sprite
-        ld      b,SNOWBALLS_CNT-1       ; define all of them except last one
+        ld      b,SNOWBALLS_CNT         ; define all of them
         ld      hl,0                    ; HL will generate X positions
         ld      e,32                    ; E will generate Y positions
         ld      d,$80 + 52              ; visible sprite + snowball pattern (52, second is 53)
@@ -182,10 +180,10 @@ InitBallsLoop:
         ld      (ix+S_SPRITE_4B_ATTR.mrx8),h    ; clear pal offset, mirrors, rotate, set x8
         ld      (ix+S_SPRITE_4B_ATTR.vpat),d
         ; adjust initial position and pattern for next ball
-        add     hl,13                   ; 13*32 = 416: will produce X coordinates 0..511 range only
+        add     hl,15   ; X += 15 for next one
         ld      a,e
-        add     a,5
-        ld      e,a                     ; 5*32 = 160 pixel spread vertically
+        add     a,44    ; Y += 44 for next one
+        ld      e,a
         ld      a,d
         xor     1                       ; alternate snowball patterns between 52/53
         ld      d,a
@@ -195,11 +193,6 @@ InitBallsLoop:
         add     ix,de
         pop     de
         djnz    InitBallsLoop
-        ; init the last snowball for testing collisions code (will just stand near bottom)
-        ld      (ix+S_SPRITE_4B_ATTR.x),100
-        ld      (ix+S_SPRITE_4B_ATTR.y),192
-        ld      (ix+S_SPRITE_4B_ATTR.mrx8),0
-        ld      (ix+S_SPRITE_4B_ATTR.vpat),d
 
         ; init game state for new game
         call    GameStateInit_NewGame
@@ -252,11 +245,6 @@ GameLoop:
         ENDIF
         call    SnowballvsPlayerCollision
 
-    ; DEBUG add some random value to score to verify it works (every 63 frames)
-        ld      a,(TotalFrames)
-        and     $3F
-        call    z,DebugRandomScoreAdd
-
     IF 0    ; DEBUG wait for fire key after frame
 .waitForFire:       call ReadInputDevices : ld a,(Player1Controls) : bit JOY_BIT_FIRE,a : jr z,.waitForFire
 .waitForRelease:    call ReadInputDevices : ld a,(Player1Controls) : bit JOY_BIT_FIRE,a : jr nz,.waitForRelease
@@ -265,7 +253,7 @@ GameLoop:
     ; do the GameLoop infinitely
         jr      GameLoop
 
-DebugRandomScoreAdd:    ; DEBUG
+DebugRandomScoreAdd:    ; DEBUG FIXME remove
         call    Rand16
         ld      a,l
         xor     h       ; 0..255 to add to score (score is displayed as *100, so it's +0..+25,500)
@@ -427,6 +415,7 @@ RefreshUi:
 
 AddScore:
     ; In: A = score to add (0..255, score is automatically *100)
+    ; Modifies: BC, HL, AF
         ld      bc,(100<<8) | $FF   ; B = 100, C = -1
         call    .extractDigit
         push    bc
@@ -488,8 +477,49 @@ DecreaseBonus:
     ; the collision detection player vs snowball (only player vs balls)
 
 SnowballvsPlayerCollision:
-        ; read player position into registers
+    ; DEBUG clear any remaining palette offset from before
+        ld      a,(SprPlayer.mrx8)
+        and     $0F
+        ld      (SprPlayer.mrx8),a
+
+    ; player's collision handler address
+        ld      hl,PlayerVsBallCollisionHandler
+    ; IX to point to the player sprite (position for collision)
         ld      ix,SprPlayer
+    ; call the collision checks
+        call    SnowballvsSpriteCollision
+    ; clear the old collisionFx sprites from previous frame
+        ld      a,c
+        ld      (CollisionFxCount),a    ; remember new amount of collision FX sprites
+        or      a
+        ret     z
+    ; there is some collision with snowball, "just die, can't ya?"
+        ;FIXME
+        ret
+
+PlayerVsBallCollisionHandler:
+    ; DEBUG modify player palette offset for fun
+        ld      a,(SprPlayer.mrx8)
+        add     a,$10
+        ld      (SprPlayer.mrx8),a
+    ; nothing to do here, the player will die at the end
+        ret
+
+    ;-------------------------------------------------------------------------------------
+    ; the collision detection of S_SPRITE_4B_ATTR vs snowballs
+    ; with custom collision handler (the caller must override the sub-routine address)
+
+SnowballvsSpriteCollision:
+    ; In:
+    ;  IX = S_SPRITE_4B_ATTR instance to check balls against
+    ;  HL = collision-handler sub-routine
+    ; Modifies:
+    ;  AF, BC, DE, HL, IX (IY is preserved) + what collision handler does
+    ; --- collision handler ABI ---
+    ; In: IX = colliding ball, B = SNOWBALLS_CNT-index_of_ball, C = total_collisions_counter
+    ; Must preserve: BC, IX, HL, can modify: AF, DE
+        ld      (.ch),hl
+        ; read sprite position into registers
         ld      l,(ix+S_SPRITE_4B_ATTR.x)
         ld      h,(ix+S_SPRITE_4B_ATTR.mrx8)
         ; "normalize" X coordinate to have coordinate system 0,0 .. 255,191 (PAPER area)
@@ -499,8 +529,6 @@ SnowballvsPlayerCollision:
         ld      a,(ix+S_SPRITE_4B_ATTR.y)
         add     a,-32+8
         ld      h,a                     ; Y normalized, HL = [x,y] of player for tests
-        ; init IY to point to specialFX dynamic part of sprites displaying collision effect
-        ld      iy,SprCollisionFx
         ld      ix,SprSnowballs
         ld      bc,SNOWBALLS_CNT<<8     ; B = snowballs count, C = 0 (collisions counter)
 .snowballLoop:
@@ -545,45 +573,14 @@ SnowballvsPlayerCollision:
         cp      (6+5)*(6+5)             ; check against radius 6+5px, if less -> collision
             ; 6px is snowball radius, 5px is the player radius, being a bit benevolent (a lot)
         jr      nc,.skipCollisionCheck
-        ; collision detected, create new effectFx sprite at the snowbal possition
+    ; collision detected, create new effectFx sprite at the snowbal possition
         inc     c                       ; collision counter
-        ld      e,(ix+S_SPRITE_4B_ATTR.x)       ; copy the data from snowball sprite
-        ld      a,(ix+S_SPRITE_4B_ATTR.y)
-        add     a,2                     ; +2 down
-        ld      d,(ix+S_SPRITE_4B_ATTR.mrx8)
-        ld      (iy+S_SPRITE_4B_ATTR.x),e
-        ld      (iy+S_SPRITE_4B_ATTR.y),a
-        ld      (iy+S_SPRITE_4B_ATTR.mrx8),d
-        ld      (iy+S_SPRITE_4B_ATTR.vpat),$80 + 61 ; pattern 61 + visible
-        ld      de,S_SPRITE_4B_ATTR
-        add     iy,de                   ; advance collisionFx sprite ptr
+.ch=$+1 call    PlayerVsBallCollisionHandler
 .skipCollisionCheck:
         ; next snowball, do them all
         ld      de,S_SPRITE_4B_ATTR
         add     ix,de
         djnz    .snowballLoop
-        ; clear the old collisionFx sprites from previous frame
-        ld      a,(CollisionFxCount)
-        sub     c
-        jr      c,.noFxToRemove
-        jr      z,.noFxToRemove
-        ld      b,a                     ; fx sprites to make invisible
-.removeFxLoop:
-        ld      (iy+S_SPRITE_4B_ATTR.vpat),d    ; DE = 4 -> D=0
-        add     iy,de
-        djnz    .removeFxLoop
-.noFxToRemove:
-        ld      a,c
-        ld      (CollisionFxCount),a    ; remember new amount of collision FX sprites
-        ; also modify players palette offset by count of collisions (for fun)
-        swapnib
-        and     $F0
-        ld      c,a
-        ld      ix,SprPlayer
-        ld      a,(ix+S_SPRITE_4B_ATTR.mrx8)
-        and     $0F
-        or      c
-        ld      (ix+S_SPRITE_4B_ATTR.mrx8),a
         ret
 
     ;-------------------------------------------------------------------------------------
@@ -749,7 +746,7 @@ Player1MoveByControls:
         ld      a,18
         add     a,h
         ld      (Player1SafeLandingY),a
-        ; C = extras of right platform, L = posX, B = user controls
+        ; C = extras of right platform, L = posX, H = posY, B = user controls
 
         bit     JOY_BIT_FIRE,b
         jr      z,.notJumpPressed
@@ -922,7 +919,7 @@ Player1MoveByControls:
 SnowballsAI:
         ld      ix,SprSnowballs
         ld      de,S_SPRITE_4B_ATTR
-        ld      b,SNOWBALLS_CNT-1   ; move all of them except last
+        ld      b,SNOWBALLS_CNT     ; move all visible of them
 .loop:
         bit     7,(ix+S_SPRITE_4B_ATTR.vpat)
         jr      z,.doNextSnowball   ; if the sprite is not visible, don't process it
@@ -1165,11 +1162,10 @@ Sprites:
             ; then max SNOWBALLS_CNT are for collision sparks (will render above player) (FX sprite)
 
         ; adding symbols to point inside the Sprites memory reserved above
-SNOWBALLS_CNT   EQU     28
+SNOWBALLS_CNT   EQU     32
 SprSnowballs:   EQU     Sprites + 0*S_SPRITE_4B_ATTR    ; first snowball sprite at this address
-SprPlayer:      EQU     Sprites + SNOWBALLS_CNT*S_SPRITE_4B_ATTR    ; player sprite is here
-SprCollisionFx: EQU     SprPlayer + S_SPRITE_4B_ATTR
-SprLivesUi:     EQU     SprCollisionFx + SNOWBALLS_CNT * S_SPRITE_4B_ATTR
+SprPlayer:      S_SPRITE_4B_ATTR = Sprites + SNOWBALLS_CNT*S_SPRITE_4B_ATTR    ; player sprite is here
+SprLivesUi:     EQU     SprPlayer + S_SPRITE_4B_ATTR
 
     ; platforms collisions - data of platforms and their heights + extras
 
