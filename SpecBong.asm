@@ -13,9 +13,7 @@
 ; included as L2 pixel data, from correct offset, no need of any further conversion)
 
 ; TODO plan to final release:
-; - upon jump "drop" invisible sprite "egg" to calculate collisions against balls
-; - track the hits of "egg" (only once per ball) and score it: first +100, next: 3x (300, 900, 2700, ...)
-; - display "egg" bonus to player with delayed decay (needs probably two of these, but only single "egg" itself)
+; - add logic: generating the snowballs (difficulty per level)
 ; - add logic: total score, total lives, bonus-timer
 ; - reset level, end of level, death of player, game over
 
@@ -180,9 +178,9 @@ InitBallsLoop:
         ld      (ix+S_SPRITE_4B_ATTR.mrx8),h    ; clear pal offset, mirrors, rotate, set x8
         ld      (ix+S_SPRITE_4B_ATTR.vpat),d
         ; adjust initial position and pattern for next ball
-        add     hl,15   ; X += 15 for next one
+        add     hl,7    ; X += something for next one
         ld      a,e
-        add     a,44    ; Y += 44 for next one
+        add     a,-10   ; Y += something for next one
         ld      e,a
         ld      a,d
         xor     1                       ; alternate snowball patterns between 52/53
@@ -238,6 +236,12 @@ GameLoop:
         ENDIF
         call    ReadInputDevices
         call    Player1MoveByControls
+        IFDEF DISPLAY_PERFORMANCE_DEBUG_BORDER
+            ; black border: to measure the jump bonus refresh code performance
+            ld      a,0
+            out     (ULA_P_FE),a
+        ENDIF
+        call    JumpBonusLogic
         IFDEF DISPLAY_PERFORMANCE_DEBUG_BORDER
             ; cyan border: to measure the collisions code performance
             ld      a,5
@@ -300,6 +304,7 @@ GameStateInit_NewLife:
         ld      (Player1LadderData+1),a         ; just "tall" to zero is enough
         ld      (Player1JumpIdx),a
         ld      (Player1JumpDir),a
+        ld      (JumpBonusDetection.x),a        ; switch off JumpBonus detector
         dec     a       ; A = 255
         ld      (Player1SafeLandingY),a
     ;TODO snowball AI reset + sprites reset
@@ -471,6 +476,101 @@ DecreaseBonus:
         ld      h,'9'               ; L is still valid 0..9, fix the hundreds digit to "9"
 .writeNewValue:
         ld      (LevelBonus),hl
+        ret
+
+    ;-------------------------------------------------------------------------------------
+    ; Part 11 - jump-bonus-over-snowball scoring (logic + detection by collisions code)
+
+JumpBonusLogic:
+    ; refresh the bonus effect sprites
+        ld      iy,SprJumpStars
+        ld      de,S_SPRITE_4B_ATTR
+        ld      bc,(TotalFrames)    ; C = total Frames
+        ld      b,JUMP_STAR_CNT
+.refreshStarLoop:
+        bit     7,(iy+S_SPRITE_4B_ATTR.vpat)
+        jr      z,.skipThisOne      ; this one is invisible (unused)
+        ; every second frame (for this particular star) fly up by 1px
+        ld      a,c
+        xor     b
+        rra
+        jr      nc,.skipThisOne
+        dec     (iy+S_SPRITE_4B_ATTR.y)     ; fly up
+        ; every fourth frame (for this particular star) modify mirror/rotate flags
+        rra
+        jr      nc,.skipThisOne
+        ld      a,(iy+S_SPRITE_4B_ATTR.mrx8)
+        add     a,2
+        ld      (iy+S_SPRITE_4B_ATTR.mrx8),a
+        ; when mirror/rotate flags get back to zero, make it invisible (it's like countdown timer)
+        and     $0E
+        jr      nz,.skipThisOne             ; still visible
+        ld      (iy+S_SPRITE_4B_ATTR.vpat),a    ; visible = OFF
+.skipThisOne:
+        add     iy,de
+        djnz    .refreshStarLoop
+    ; check if the jump-bonus-detection is in play (X == 0 -> it's off currently)
+        ld      a,(JumpBonusDetection.x)
+        or      a
+        ret     z
+    ; calculate the collisions against the fake "sprite" used as bonus detector
+        ld      ix,JumpBonusDetection
+        ; this will spawn new bonus effect sprites and add score
+        ld      hl,JumpBonusCollisionHandler
+        ld      iy,SprJumpStars             ; pointer to the star-sprites memory for handler
+        jr      SnowballvsSpriteCollision   ; do the collisions and return
+
+JumpBonusCollisionHandler:
+    ; In: IX = colliding ball, B = SNOWBALLS_CNT-index_of_ball, C = total_collisions_counter
+    ; Must preserve: BC, IX, HL, can modify: AF, DE
+
+    ; check if this is new ball -> each ball gives bonus only once
+        ld      d,high JumpBonusHitBy
+        ld      e,b             ; B = 1..SNOWBALLS_CNT (inclusive, never zero)
+        ld      a,(de)          ; DE = address into flags field
+        or      a
+        ret     nz              ; this ball was already scored, ignore it
+        inc     a
+        ld      (de),a          ; flag it for future test
+    ; new ball, add the bonus score for evasion manuever
+        ld      a,(JumpBonusScore)
+        add     a,a             ; bonus*=2
+        jr      nz,.bonusDidDouble
+        inc     a               ; bonus=1 for first ball
+.bonusDidDouble:
+    ; this means the total bonus is: 100 for one ball, 300 for two, 700 for three, 1500 for four, ...
+    ; (doing +100, +200, +400, +800, +1600, for each new collision...)
+        ld      (JumpBonusScore),a
+        push    bc
+        push    hl
+        call    AddScore        ; add bonus to the score
+        pop     hl
+        pop     bc
+    ; add new star effect sprite
+        ; find first empty star-sprite
+        ld      de,S_SPRITE_4B_ATTR
+        jr      .findFirstEmptyLoopEntry
+.findFirstEmptyLoop:
+        add     iy,de
+.findFirstEmptyLoopEntry:
+        ; check if the new IY points still within the star sprites, or already at balls
+        ld      a,JUMP_STAR_CNT*S_SPRITE_4B_ATTR-1
+        cp      iyl
+        ret     c               ; then just return without effect sprite (score was added)
+        ; is it invisible?
+        bit     7,(iy+S_SPRITE_4B_ATTR.vpat)
+        jr      nz,.findFirstEmptyLoop
+        ld      (iy+S_SPRITE_4B_ATTR.vpat),$80+33   ; star pattern + make it visible
+        ld      de,(JumpBonusDetection)             ; extract [x,y] of detector into DE
+        ld      (iy+S_SPRITE_4B_ATTR.x),e           ; will become star position
+        ld      (iy+S_SPRITE_4B_ATTR.y),d
+        ; set palette offset based on the score bonus (just for fun)
+        ld      a,(JumpBonusScore)
+        neg
+        inc     a
+        swapnib
+        and     $F0             ; reset mirror/rotate and x8=0
+        ld      (iy+S_SPRITE_4B_ATTR.mrx8),a
         ret
 
     ;-------------------------------------------------------------------------------------
@@ -697,6 +797,7 @@ Player1MoveByControls:
         ld      (ix+S_SPRITE_4B_ATTR.y),h   ; land *at* platform precisely
         xor     a
         ld      (Player1JumpIdx),a      ; next frame do regular AI (no more jump table)
+        ld      (JumpBonusDetection.x),a    ; switch off jump-bonus detector OFF
         ld      (ix+S_SPRITE_4B_ATTR.vpat),$80+4    ; landing sprite
         ld      a,4                     ; keep landing sprite for 4 frames
         ld      (Player1ControlsCoolDown),a
@@ -751,6 +852,17 @@ Player1MoveByControls:
         bit     JOY_BIT_FIRE,b
         jr      z,.notJumpPressed
     ; start a new jump sequence
+        ; clear the jump-bonus flag field, and initialize the detector to count bonus
+        push    bc
+        push    hl
+        ld      hl,JumpBonusScore
+        ld      de,JumpBonusScore+1
+        ld      bc,SNOWBALLS_CNT        ; clears JumpBonusScore and JumpBonusHitBy field
+        ld      (hl),b                  ; B = 0
+        ldir
+        pop     hl
+        pop     bc
+        ; now start the jump-sequence itself
         ld      a,$80+3     ; jump pattern + visible
         ld      (ix+S_SPRITE_4B_ATTR.vpat),a
         xor     a
@@ -767,6 +879,14 @@ Player1MoveByControls:
         inc     a
 .noRightJump:
         ld      (Player1JumpDir),a
+        ; set detector position to current player position advancing it +-4px jump-dir ahead
+        add     a,a
+        add     a,a
+        add     a,l
+        ld      (JumpBonusDetection.x),a
+        ld      a,h
+        ld      (JumpBonusDetection.y),a
+        ; start the jump-table movement
         ld      a,low PlayerJumpYOfs
         jp      .doTheTableJumpFall     ; and do the first tick of jump this frame already
 
@@ -1162,9 +1282,15 @@ Sprites:
             ; then max SNOWBALLS_CNT are for collision sparks (will render above player) (FX sprite)
 
         ; adding symbols to point inside the Sprites memory reserved above
+JUMP_STAR_CNT   EQU     16
 SNOWBALLS_CNT   EQU     32
-SprSnowballs:   EQU     Sprites + 0*S_SPRITE_4B_ATTR    ; first snowball sprite at this address
-SprPlayer:      S_SPRITE_4B_ATTR = Sprites + SNOWBALLS_CNT*S_SPRITE_4B_ATTR    ; player sprite is here
+; first jump-bonus star at this address (early sprites, will be rendered under others):
+SprJumpStars:   EQU     Sprites
+; first snowball sprite at this address (rendered under player, above bonus stars):
+SprSnowballs:   EQU     SprJumpStars + JUMP_STAR_CNT*S_SPRITE_4B_ATTR
+; player sprite is here (defined as structure, so also direct labels like "SprPlayer.x" work)
+SprPlayer:      S_SPRITE_4B_ATTR = SprSnowballs + SNOWBALLS_CNT*S_SPRITE_4B_ATTR
+; player lives UI sprites here (UI needs 6 of them)
 SprLivesUi:     EQU     SprPlayer + S_SPRITE_4B_ATTR
 
     ; platforms collisions - data of platforms and their heights + extras
@@ -1214,6 +1340,15 @@ PlayerJumpYOfs:
 PlayerFallYOfs:                                 ; first item of free-fall w/o jump
         DB                       1,  1,  1,  2  ; last item to be used repeatedly
         ASSERT  low $ == 0      ; did reach end of aligned 256B block?
+
+        ALIGN   256                     ; align for simpler calculation of address
+JumpBonusScore:
+        DB      0
+JumpBonusHitBy:
+        DS      SNOWBALLS_CNT,0         ; flags which ball were already counted in bonus
+        ASSERT low JumpBonusHitBy == 1  ; index from 1 (!), the collision handler gets 1..SNOWBALLS_CNT
+JumpBonusDetection:     S_SPRITE_4B_ATTR
+        ASSERT low JumpBonusDetection == SNOWBALLS_CNT+1 ; and the JumpBonusDetection should be out of the field
 
     ;-------------------------------------------------------------------------------------
     ; reserve area for stack at $B800..$BFFF region
