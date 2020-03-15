@@ -2,6 +2,8 @@
 
 This is tutorial-like small project for ZX Next (TBBlue board) written in Z80N assembly (in [sjasmplus](https://github.com/z00m128/sjasmplus) syntax/dialect) by Peter H. and John McG.
 
+The final result looks like [this (youtube video)](https://youtu.be/k3OnM-5lB80).
+
 ### What you'll learn
 
 - how to kick off assembly-only project, producing NEX file
