@@ -49,8 +49,8 @@ ZX128P3_MEMORY_P_1FFD           equ $1FFD
 AY_REG_P_FFFD                   equ $FFFD
 AY_DATA_P_BFFD                  equ $BFFD
 
-Z80_DMA_PORT_DATAGEAR           equ $6B     ; on ZXN the zxnDMA handles this
-Z80_DMA_PORT_MB02               equ $0B     ; only in Zilog DMA mode zxnDMA handles this
+Z80_DMA_PORT_DATAGEAR           equ $6B     ; on ZXN the zxnDMA handles this in zxnDMA mode
+Z80_DMA_PORT_MB02               equ $0B     ; on ZXN the zxnDMA handles this in Zilog mode
 
 DIVMMC_CONTROL_P_E3             equ $E3
 SPI_CS_P_E7                     equ $E7
@@ -74,33 +74,49 @@ TBBLUE_REGISTER_ACCESS_P_253B   equ $253B
     ; -- port $253B = 9531  Read?+Write? (detection bitmask: %0010_0101_0011_1011)
     ;   -- data for selected NextREG (read/write depends on the register selected)
 
+; indexes into DAC_CHANNEL_* def-arrays, depending on the type of DAC you want to use
+DAC_GS_COVOX_INDEX              equ     1
+DAC_PENTAGON_ATM_INDEX          equ     2
+DAC_SPECDRUM_INDEX              equ     3
+DAC_SOUNDRIVE1_INDEX            equ     4
+DAC_SOUNDRIVE2_INDEX            equ     5
+DAC_COVOX_INDEX                 equ     6
+DAC_PROFI_COVOX_INDEX           equ     7
+    ; -- enable 8bit DACs with PERIPHERAL_3_NR_08, use DAC_*_INDEX to access particular set of ports
+    DEFARRAY    DAC_CHANNEL_A  @@,  @@, $FB, $DF, $1F, $F1,  @@, $3F
+    DEFARRAY    DAC_CHANNEL_B  @@, $B3,  @@,  @@, $0F, $F3, $0F,  @@
+    DEFARRAY    DAC_CHANNEL_C  @@, $B3,  @@,  @@, $4F, $F9, $4F,  @@
+    DEFARRAY    DAC_CHANNEL_D  @@,  @@, $FB, $DF, $5F, $FB,  @@, $5F
+    ; -- like for example: ld bc,DAC_CHANNEL_B[DAC_PROFI_COVOX_INDEX]
+
 I2C_SCL_P_103B                  equ $103B   ; i2c bus port (clock) (write only?)
 I2C_SDA_P_113B                  equ $113B   ; i2c bus port (data) (read+write)
 UART_TX_P_133B                  equ $133B   ; UART tx port (read+write)
 UART_RX_P_143B                  equ $143B   ; UART rx port (read+write)
+UART_CTRL_P_153B                equ $153B   ; UART control port (read+write)
 
+ZILOG_DMA_P_0B                  equ $0B
 ZXN_DMA_P_6B                    equ $6B
     ; -- port $6B = 107 Read+Write (detection bitmask: %xxxx_xxxx_0110_1011)
     ;   - The zxnDMA is mostly compatible with Zilog DMA chip (Z8410) (at least
     ;     as far as old ZX apps are concerned), but has many modifications.
-    ;   - core3.0 update - specific behaviour details can be selected (PERIPHERAL_2_NR_06)
+    ;   - core3.1.1 update - Zilog/zxnDMA mode is now selected by port number, not PERIPHERAL_2_NR_06!
+    ;   - core3.0 update - (REMOVED) specific behaviour details can be selected (PERIPHERAL_2_NR_06)
 
 LAYER2_ACCESS_P_123B            equ $123B
     ; -- port $123B = 4667 Read+Write (detection bitmask: %0001_0010_0011_1011)
-    ;   -- bit 7-6 = write-Layer2-over-ROM bank selection (00, 01 or 10) (11 is 48kiB mode)
-    ;   -- bit 3 = shadow banks "over ROM" (nextreg $13 banks instead of $12 banks)
-    ;   -- bit 2 = read-Layer2-over-ROM (1 = read at $0000..$3FFF reads from Layer2)
-    ;   -- bit 1 = Layer2 visibility (1 = visible, 0 = disabled) (always nextreg $12)
-    ;   -- bit 0 = write-Layer2-over-ROM (1 = write at $0000..$3FFF writes into Layer2)
+    ;   - see ports.txt or wiki for details (has become a bit more complex over time)
+
 LAYER2_ACCESS_WRITE_OVER_ROM    equ $01     ; map Layer2 bank into ROM area (0000..3FFF) for WRITE-only (reads as ROM)
 LAYER2_ACCESS_L2_ENABLED        equ $02     ; enable Layer2 (make banks form nextreg $12 visible)
 LAYER2_ACCESS_READ_OVER_ROM     equ $04     ; map Layer2 bank into ROM area (0000..3FFF) for READ-only
 LAYER2_ACCESS_SHADOW_OVER_ROM   equ $08     ; bank selected by bits 6-7 is from "shadow Layer 2" banks range (nextreg $13)
+LAYER2_ACCESS_BANK_OFFSET       equ $10     ; bit 2-0 is bank offset for current active mapping +0..+7 (other bits are reserved, use 0)
 LAYER2_ACCESS_OVER_ROM_BANK_M   equ $C0     ; (mask of) value 0..3 selecting bank mapped for R/W (Nextreg $12 or $13)
-LAYER2_ACCESS_OVER_ROM_BANK_0   equ $00     ; screen lines 0..63
-LAYER2_ACCESS_OVER_ROM_BANK_1   equ $40     ; screen lines 64..127
-LAYER2_ACCESS_OVER_ROM_BANK_2   equ $80     ; screen lines 128..191
-LAYER2_ACCESS_OVER_ROM_48K      equ $C0     ; maps all 0..191 lines into $0000..$BFFF region
+LAYER2_ACCESS_OVER_ROM_BANK_0   equ $00     ; screen lines 0..63    (256x192) or columns 0..63    (320x256) or columns 0..127   (640x256)
+LAYER2_ACCESS_OVER_ROM_BANK_1   equ $40     ; screen lines 64..127  (256x192) or columns 64..127  (320x256) or columns 128..255 (640x256)
+LAYER2_ACCESS_OVER_ROM_BANK_2   equ $80     ; screen lines 128..191 (256x192) or columns 128..191 (320x256) or columns 256..383 (640x256)
+LAYER2_ACCESS_OVER_ROM_48K      equ $C0     ; maps all 0..191 lines into $0000..$BFFF region (256x192) or 2/3 of columns in 320x256/640x256
 
 SPRITE_STATUS_SLOT_SELECT_P_303B    equ $303B
     ; -- port $303B = 12347  Read+Write (detection bitmask: %0011_0000_0011_1011)
@@ -153,7 +169,7 @@ NEXT_RESET_NR_02                equ $02
 MACHINE_TYPE_NR_03              equ $03
 ROM_MAPPING_NR_04               equ $04     ;In config mode, allows RAM to be mapped to ROM area.
 PERIPHERAL_1_NR_05              equ $05     ;Sets joystick mode, video frequency and Scandoubler.
-PERIPHERAL_2_NR_06              equ $06     ;Enables Acceleration, DivMMC, Multiface, Mouse and AY audio
+PERIPHERAL_2_NR_06              equ $06     ;Enables turbo/50Hz/60Hz keys, DivMMC, Multiface and audio (beep/AY)
 TURBO_CONTROL_NR_07             equ $07
 PERIPHERAL_3_NR_08              equ $08     ;ABC/ACB Stereo, Internal Speaker, SpecDrum, Timex Video Modes, Turbo Sound Next, RAM contention and [un]lock 128k paging.
 PERIPHERAL_4_NR_09              equ $09     ;Sets scanlines, AY mono output, Sprite-id lockstep, disables Kempston and divMMC ports.
@@ -161,7 +177,7 @@ NEXT_VERSION_MINOR_NR_0E        equ $0E
 ANTI_BRICK_NR_10                equ $10
 VIDEO_TIMING_NR_11              equ $11
 LAYER2_RAM_BANK_NR_12           equ $12     ;bank number where visible Layer 2 video memory begins.
-LAYER2_RAM_SHADOW_BANK_NR_13    equ $13     ;bank number for Layer2 "shadow" write-over-rom
+LAYER2_RAM_SHADOW_BANK_NR_13    equ $13     ;bank number for "shadow" write-over-rom mapping
 GLOBAL_TRANSPARENCY_NR_14       equ $14     ;Sets the color treated as transparent for ULA/Layer2/LoRes
 SPRITE_CONTROL_NR_15            equ $15     ;LoRes mode, Sprites configuration, layers priority
     ; bit 7: enable LoRes mode
@@ -182,14 +198,14 @@ RASTER_INTERUPT_CONTROL_NR_22   equ $22     ;Controls the timing of raster inter
 RASTER_INTERUPT_VALUE_NR_23     equ $23
 ULA_XOFFSET_NR_26               equ $26     ;since core 3.0
 ULA_YOFFSET_NR_27               equ $27     ;since core 3.0
-HIGH_ADRESS_KEYMAP_NR_28        equ $28
+HIGH_ADRESS_KEYMAP_NR_28        equ $28     ;reads first 8b part of value written to $44 (even unfinished 16b write)
 LOW_ADRESS_KEYMAP_NR_29         equ $29
 HIGH_DATA_TO_KEYMAP_NR_2A       equ $2A
 LOW_DATA_TO_KEYMAP_NR_2B        equ $2B
-DAC_B_MIRROR_NR_2C              equ $2C
-DAC_AD_MIRROR_NR_2D             equ $2D     ;another alias for $2D
+DAC_B_MIRROR_NR_2C              equ $2C     ;reads as MSB of Pi I2S left side sample, LSB waits at $2D
+DAC_AD_MIRROR_NR_2D             equ $2D     ;another alias for $2D, reads LSB of value initiated by $2C or $2E read
 SOUNDDRIVE_DF_MIRROR_NR_2D      equ $2D     ;Nextreg port-mirror of port 0xDF
-DAC_C_MIRROR_NR_2E              equ $2E
+DAC_C_MIRROR_NR_2E              equ $2E     ;reads as MSB of Pi I2S right side sample, LSB waits at $2D
 TILEMAP_XOFFSET_MSB_NR_2F       equ $2F
 TILEMAP_XOFFSET_LSB_NR_30       equ $30
 TILEMAP_YOFFSET_NR_31           equ $31
@@ -248,6 +264,7 @@ EXPANSION_BUS_DECODING_2_NR_88  equ $88     ;bits 16-23 mask
 EXPANSION_BUS_DECODING_3_NR_89  equ $89     ;bits 24-31 mask
 EXPANSION_BUS_PROPAGATE_NR_8A   equ $8A     ;Monitoring internal I/O or adding external keyboard
 ALTERNATE_ROM_NR_8C             equ $8C     ;Enable alternate ROM or lock 48k ROM
+ZX_MEM_MAPPING_NR_8E            equ $8E     ;shortcut to set classic zx128+3 memory model at one place
 PI_GPIO_OUT_ENABLE_0_NR_90      equ $90     ;pins 0-7
 PI_GPIO_OUT_ENABLE_1_NR_91      equ $91     ;pins 8-15
 PI_GPIO_OUT_ENABLE_2_NR_92      equ $92     ;pins 16-23
@@ -261,8 +278,10 @@ PI_I2S_AUDIO_CONTROL_NR_A2      equ $A2
 PI_I2S_CLOCK_DIVIDE_NR_A3       equ $A3
 ESP_WIFI_GPIO_OUTPUT_NR_A8      equ $A8
 ESP_WIFI_GPIO_NR_A9             equ $A9
-DIVMMC_TRAP_ENABLE_1_NR_B2      equ $B2
-DIVMMC_TRAP_ENABLE_2_NR_B4      equ $B4
+EXTENDED_KEYS_0_NR_B0           equ $B0     ;read Next compound keys as standalone keys (outside of zx48 matrix)
+EXTENDED_KEYS_1_NR_B1           equ $B1     ;read Next compound keys as standalone keys (outside of zx48 matrix)
+;DIVMMC_TRAP_ENABLE_1_NR_B2      equ $B2    ; NOT IMPLEMENTED in core yet (as of 3.1.4), may happen in future
+;DIVMMC_TRAP_ENABLE_2_NR_B4      equ $B4    ; NOT IMPLEMENTED in core yet (as of 3.1.4), may happen in future
 DEBUG_LED_CONTROL_NR_FF         equ $FF     ;Turns debug LEDs on and off on TBBlue implementations that have them.
 
 ;-----------------------------------------------------------------------------
