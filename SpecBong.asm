@@ -1352,7 +1352,7 @@ WaitForScanlineUnderUla:
 .totalFramesUpdated:
     ; read NextReg $1F - LSB of current raster line
         ld      bc,TBBLUE_REGISTER_SELECT_P_243B
-        ld      a,RASTER_LINE_LSB_NR_1F
+        ld      a,VIDEO_LINE_LSB_NR_1F
         out     (c),a       ; select NextReg $1F
         inc     b           ; BC = TBBLUE_REGISTER_ACCESS_P_253B
     ; if already at scanline 192, then wait extra whole frame (for super-fast game loops)

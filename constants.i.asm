@@ -173,6 +173,7 @@ PERIPHERAL_2_NR_06              equ $06     ;Enables turbo/50Hz/60Hz keys, DivMM
 TURBO_CONTROL_NR_07             equ $07
 PERIPHERAL_3_NR_08              equ $08     ;ABC/ACB Stereo, Internal Speaker, SpecDrum, Timex Video Modes, Turbo Sound Next, RAM contention and [un]lock 128k paging.
 PERIPHERAL_4_NR_09              equ $09     ;Sets scanlines, AY mono output, Sprite-id lockstep, disables Kempston and divMMC ports.
+PERIPHERAL_5_NR_0A              equ $0A     ;Mouse buttons and DPI settings (core 3.1.5)
 NEXT_VERSION_MINOR_NR_0E        equ $0E
 ANTI_BRICK_NR_10                equ $10
 VIDEO_TIMING_NR_11              equ $11
@@ -192,10 +193,10 @@ CLIP_SPRITE_NR_19               equ $19
 CLIP_ULA_LORES_NR_1A            equ $1A
 CLIP_TILEMAP_NR_1B              equ $1B
 CLIP_WINDOW_CONTROL_NR_1C       equ $1C     ;set to 15 to reset all clip-window indices to 0
-RASTER_LINE_MSB_NR_1E           equ $1E
-RASTER_LINE_LSB_NR_1F           equ $1F
-RASTER_INTERUPT_CONTROL_NR_22   equ $22     ;Controls the timing of raster interrupts and the ULA frame interrupt.
-RASTER_INTERUPT_VALUE_NR_23     equ $23
+VIDEO_LINE_MSB_NR_1E            equ $1E
+VIDEO_LINE_LSB_NR_1F            equ $1F
+VIDEO_INTERUPT_CONTROL_NR_22    equ $22     ;Controls the timing of raster interrupts and the ULA frame interrupt.
+VIDEO_INTERUPT_VALUE_NR_23      equ $23
 ULA_XOFFSET_NR_26               equ $26     ;since core 3.0
 ULA_YOFFSET_NR_27               equ $27     ;since core 3.0
 HIGH_ADRESS_KEYMAP_NR_28        equ $28     ;reads first 8b part of value written to $44 (even unfinished 16b write)
@@ -237,6 +238,7 @@ COPPER_DATA_NR_60               equ $60
 COPPER_CONTROL_LO_NR_61         equ $61
 COPPER_CONTROL_HI_NR_62         equ $62
 COPPER_DATA_16B_NR_63           equ $63     ; same as $60, but waits for full 16b before write
+VIDEO_LINE_OFFSET_NR_64         equ $64     ; (core 3.1.5)
 ULA_CONTROL_NR_68               equ $68
 DISPLAY_CONTROL_NR_69           equ $69
 LORES_CONTROL_NR_6A             equ $6A
@@ -275,7 +277,7 @@ PI_GPIO_2_NR_9A                 equ $9A     ;pins 16-23
 PI_GPIO_3_NR_9B                 equ $9B     ;pins 24-27
 PI_PERIPHERALS_ENABLE_NR_A0     equ $A0
 PI_I2S_AUDIO_CONTROL_NR_A2      equ $A2
-PI_I2S_CLOCK_DIVIDE_NR_A3       equ $A3
+;PI_I2S_CLOCK_DIVIDE_NR_A3       equ $A3    ; REMOVED in core 3.1.5 (no more master-mode)
 ESP_WIFI_GPIO_OUTPUT_NR_A8      equ $A8
 ESP_WIFI_GPIO_NR_A9             equ $A9
 EXTENDED_KEYS_0_NR_B0           equ $B0     ;read Next compound keys as standalone keys (outside of zx48 matrix)
