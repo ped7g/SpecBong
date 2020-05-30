@@ -30,7 +30,7 @@ The tutorial text is (will be) in the ["wiki" part](https://github.com/ped7g/Spe
 
 ### Useful tools, links, etc
 
-For the Next HW features description I use either [wiki](https://wiki.specnext.dev/Main_Page) (particularly [this](https://wiki.specnext.dev/Board_feature_control) page a lot), or the more compact form of technical info [nextreg.txt](https://github.com/MrKWatkins/ZXSpectrumNextTests/blob/develop/nextreg.txt) and [ports.txt](https://github.com/MrKWatkins/ZXSpectrumNextTests/blob/develop/ports.txt).
+For the Next HW features description I use either [wiki](https://wiki.specnext.dev/Main_Page) (particularly [this](https://wiki.specnext.dev/Board_feature_control) page a lot), or the more compact form of technical info [nextreg.txt (by core authors)](https://gitlab.com/SpectrumNext/ZX_Spectrum_Next_FPGA/-/blob/master/cores/zxnext/nextreg.txt) and [ports.txt](https://github.com/MrKWatkins/ZXSpectrumNextTests/blob/develop/ports.txt) (or extended/curated variants in [Next system repo](https://gitlab.com/thesmog358/tbblue/-/blob/master/docs/extra-hw/io-port-system/registers.txt) and [ports](https://gitlab.com/thesmog358/tbblue/-/blob/master/docs/extra-hw/io-port-system/ports.txt)).
 
 [Z80 instructions](http://clrhome.org/table/#) quick reference, [Z80N extended](https://wiki.specnext.dev/Extended_Z80_instruction_set) reference.
 
@@ -40,6 +40,6 @@ Sjasmplus online [documentation](http://z00m128.github.io/sjasmplus/documentatio
 
 I'm personally using [Kate](https://kate-editor.org/) text editor with the [syntax-highlight rules](https://github.com/z00m128/sjasmplus/blob/master/asm-z80-sj.xml) from the sjasmplus project, and "Build plugin" set up to assemble asm file in editor (the build-rule I use mostly looks like "`sjasmplus --fullpath --nologo --lst="%n.lst" --lstlab --msg=war "%n.asm"`").
 
-If you want to use VSC (VisualStudio Code/Codium), there are two alternatives for syntax-highlight and intelligent assistant: [Z80 MacroAsm](https://github.com/mborik/z80-macroasm-vscode) or [Asm Code Lens](https://github.com/maziac/asm-code-lens), and then some more plugins: [Z80 Assembly Meter](https://github.com/theNestruo/z80-asm-meter-vscode), [Z80 Debug Adapter](https://github.com/maziac/z80-debug), ...
+If you want to use VSC (VisualStudio Code/Codium), there are two alternatives for syntax-highlight and intelligent assistant: [Z80 MacroAsm](https://github.com/mborik/z80-macroasm-vscode) or [Asm Code Lens](https://github.com/maziac/asm-code-lens), and then some more plugins: [Z80 Assembly Meter](https://github.com/theNestruo/z80-asm-meter-vscode), [DeZog (VSC debug adapter)](https://github.com/maziac/DeZog), ...
 
 Emulators: currently there are only two emulators with TBBlue-board emulation. [#CSpect](http://cspect.org/) and [ZEsarUX](https://github.com/chernandezba/zesarux). Neither is perfect, but together and with all their modes they cover almost all possible Next-developer's needs (I have my own temporary [fork](https://github.com/ped7g/zesarux) of ZEsarUX with some extra modifications to make the TBBlue emulation closer to the 3.0+ cores of ZX Next). This tutorial project should work in any of the emulator both in "quick-boot" or "full-system-image" way of launch (and of course on the real board too).
