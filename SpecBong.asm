@@ -775,7 +775,7 @@ SnowballvsSpriteCollision:
         jr      nc,.skipCollisionCheck
     ; collision detected, create new effectFx sprite at the snowbal possition
         inc     c                       ; collision counter
-.ch=$+1 call    PlayerVsBallCollisionHandler
+.ch=$+1:call    PlayerVsBallCollisionHandler
 .skipCollisionCheck:
         ; next snowball, do them all
         ld      de,S_SPRITE_4B_ATTR
@@ -1373,7 +1373,7 @@ WaitForScanlineUnderUla:
 Rand16:
     ; Out: HL = pseudo-random number, period 65536
     ; modifies: A, DE
-.s=$+1  ld      de,0        ; seed
+.s=$+1: ld      de,0        ; seed
         ld      a,d
         ld      h,e
         ld      l,253
