@@ -225,7 +225,7 @@ GameLoop_BaseThings:
         xor     a
         out     (c),a       ; select slot 0 for sprite attributes
         ld      hl,Sprites
-        ld      bc,SPRITE_ATTRIBUTE_P_57    ; B = 0 (repeat 256x), C = sprite pattern-upload I/O port
+        ld      bc,SPRITE_ATTRIBUTE_P_57    ; B = 0 (repeat 256x), C = sprite attribute-upload I/O port
         ; out 512 bytes in total (whole sprites buffer)
         otir
         otir
