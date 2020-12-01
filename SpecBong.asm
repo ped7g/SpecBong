@@ -1599,7 +1599,7 @@ SpritePixelData:
 
     ;-------------------------------------------------------------------------------------
     ; all the data are in the virtual-device memory, now dump it into NEX file
-        SAVENEX OPEN "SpecBong.nex", start, initialStackTop, 0, 2   ; V1.2 enforced
+        SAVENEX OPEN "SpecBong.nex", start, initialStackTop, 0, 2   ; V1.2 enforced ; nexstack-ok
         SAVENEX CORE 3, 0, 0        ; core 3.0.0 required
         SAVENEX CFG MAIN_BORDER_COLOR      ; main border color already during load
         SAVENEX AUTO                ; dump all modified banks into NEX file
