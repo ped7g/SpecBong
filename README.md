@@ -1,6 +1,6 @@
 # SpecBong tutorial
 
-This is tutorial-like small project for ZX Next (TBBlue board) written in Z80N assembly (in [sjasmplus](https://github.com/z00m128/sjasmplus) syntax/dialect) by Peter H. and John McG.
+This is tutorial-like small project for ZX Next (TBBlue board) written in Z80N assembly (in [sjasmplus](https://github.com/z00m128/sjasmplus) syntax/dialect) by Peter Helcmanovsky (inspired by John McG.).
 
 The final result looks like [this (youtube video)](https://youtu.be/k3OnM-5lB80).
 
@@ -24,17 +24,17 @@ The background image is in Layer2 256x192x8 mode, static image from BMP file, HW
 
 ### What is in this repository
 
-All the code and data required to build the final NEX file, with commits history to check the evolution of the project from beginning. Particular commits are marked with "Part_#number" tag, which will be referenced from the tutorial text and you can download the sources and NEX file for each stage at [releases](https://github.com/ped7g/SpecBong/releases).
+All the code and data required to build the final NEX file, with commits history to check the evolution of the project from beginning. Particular commits are marked with "Part_#number" tag, which is referenced from the tutorial text and you can download the sources and NEX file for each stage at [releases](https://github.com/ped7g/SpecBong/releases).
 
-The tutorial text is (will be) in the ["wiki" part](https://github.com/ped7g/SpecBong/wiki) of this repository. It is written by John, reading the source code after each part was done, with his own experience how he understands the code, what he did to set up his environment and replicate the results and other insight, giving another angle on the project than the (heavily commented) source itself.
+The tutorial text is in the ["wiki" part](https://github.com/ped7g/SpecBong/wiki) of this repository. It was written after the code was finished, to complement the source changes with ideas leading to those code changes and explaining some principles and design choices. Unfortunately, I was hoping for John to provide his own write up, giving the project extra insight of somebody new to asm game dev and reading code of someone else (me), but that didn't happen. If you feel confused by the tutorial even if you are supposedly target audience, please write down some notes what is unclear, and send me the feedback, I may add further FAQ or chapters, trying to explain such questions.
 
 ### Useful tools, links, etc
 
 For the Next HW features description I use either [wiki](https://wiki.specnext.dev/Main_Page) (particularly [this](https://wiki.specnext.dev/Board_feature_control) page a lot), or the more compact form of technical info [nextreg.txt (by core authors)](https://gitlab.com/SpectrumNext/ZX_Spectrum_Next_FPGA/-/blob/master/cores/zxnext/nextreg.txt) and [ports.txt](https://github.com/MrKWatkins/ZXSpectrumNextTests/blob/develop/ports.txt) (or extended/curated variants in [Next system repo](https://gitlab.com/thesmog358/tbblue/-/blob/master/docs/extra-hw/io-port-system/registers.txt) and [ports](https://gitlab.com/thesmog358/tbblue/-/blob/master/docs/extra-hw/io-port-system/ports.txt)).
 
-[Z80 instructions](http://clrhome.org/table/#) quick reference, [Z80N extended](https://wiki.specnext.dev/Extended_Z80_instruction_set) reference.
+[Z80 instructions](http://clrhome.org/table/#) quick reference ([Z80N variant](http://ped.7gods.org/Z80N_table_ClrHome.html)), [Z80N extended](https://wiki.specnext.dev/Extended_Z80_instruction_set) reference.
 
-The code is written for [sjasmplus](https://github.com/z00m128/sjasmplus) assembler, which is command line tool. On the project page in "release" tab you can download windows executable for current latest release, if you are using different OS, the sjasmplus is cross-platform project written in C++14 with minimal dependencies, and should be easily buildable on any modern OS on any platform which: is little-endian (x86, ARM, ..), has GNU Make, has C++14 compiler (gcc/clang/...). If you have difficulties to built it on your platform, yet it fits the description, open the issue on github (I'm using linux, KDE neon distribution on x86_64 CPU). You can then use it as any other common compiler, for example by writing build rules in the Makefile or configuring build-task in your IDE/editor.
+The code is written for [sjasmplus](https://github.com/z00m128/sjasmplus) assembler, which is command line tool. On the project page in "release" tab you can download windows executable for current latest release, if you are using different OS, the sjasmplus is cross-platform project written in C++14 with minimal dependencies, and should be easily buildable on any modern OS on any platform which: has GNU Make and has C++14 compiler (gcc/clang/...). If you have difficulties to built it on your platform, yet it fits the description, open the issue on github (I'm using linux, KDE neon distribution on x86_64 CPU). You can then use it as any other common compiler, for example by writing build rules in the Makefile or configuring build-task in your IDE/editor.
 
 Sjasmplus online [documentation](http://z00m128.github.io/sjasmplus/documentation.html) is of course essential resource to fully understand the assembler directives, how they are used and their arguments, and what should be the result.
 
